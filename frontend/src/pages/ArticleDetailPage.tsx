@@ -1,12 +1,45 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, Sparkles, Play, Send, GripVertical, List, Bot, Volume2, Trash2 } from 'lucide-react';
-import { getArticle, getWords, createWord, deleteWord, generateExercise, submitExercise, getExercises, Article, Word, WordLookupResult, DerivationEtymologyResult, getTTS, Exercise } from '../services/api';
+import { getArticle, getWords, createWord, deleteWord, generateExercise, submitExercise, getExercises, Article, Word, WordLookupResult, DerivationEtymologyResult, getTTS, Exercise, SentenceTiming, ProgressInfo } from '../services/api';
+import { Sentence } from '../services/tts';
 import { LLMChat } from '../components/LLMChat';
 import { WordCard } from '../components/WordCard';
+import { TTSPlayer } from '../components/TTSPlayer';
 
 const PENDING_LOOKUP_PREFIX = 'pending_word_lookup_';
 const PENDING_LOOKUP_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// Word lookup optimization: in-memory cache with max size
+const WORD_CACHE_MAX_SIZE = 100;
+const wordCache = new Map<string, {
+  wordData: WordLookupResult;
+  timestamp: number;
+}>();
+
+// Track pending request to cancel on new lookup
+let pendingLookupController: AbortController | null = null;
+
+// Prefetch hover delay (ms)
+const PREFETCH_HOVER_DELAY_MS = 300;
+
+// Cache eviction helper - removes oldest entries if cache is full
+function evictCacheIfNeeded() {
+  if (wordCache.size >= WORD_CACHE_MAX_SIZE) {
+    // Find and remove the oldest entry
+    let oldestKey: string | null = null;
+    let oldestTime = Infinity;
+    for (const [key, value] of wordCache.entries()) {
+      if (value.timestamp < oldestTime) {
+        oldestTime = value.timestamp;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey) {
+      wordCache.delete(oldestKey);
+    }
+  }
+}
 
 export function ArticleDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -36,6 +69,10 @@ export function ArticleDetailPage() {
   const [isLoadingEtymology, setIsLoadingEtymology] = useState(false);
   const [isLoadingWord, setIsLoadingWord] = useState(false);
 
+  // Prefetch state for hover
+  const prefetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prefetchedWordsRef = useRef<Set<string>>(new Set());
+
   // User info for context
   const [userInfo, setUserInfo] = useState<{
     targetLanguage: string;
@@ -48,14 +85,20 @@ export function ArticleDetailPage() {
   const [exerciseMode, setExerciseMode] = useState(false);
   const [exercise, setExercise] = useState<any | null>(null);
   const [isGeneratingExercise, setIsGeneratingExercise] = useState(false);
-  const [exerciseAnswers, setExerciseAnswers] = useState<Record<number, string>>({});
+  const [exerciseAnswers, setExerciseAnswers] = useState<Record<number, string | string[]>>({});
   const [isSubmittingExercise, setIsSubmittingExercise] = useState(false);
   const [exerciseResults, setExerciseResults] = useState<any | null>(null);
+  const [generationProgress, setGenerationProgress] = useState<ProgressInfo | null>(null);
+  const [gradingProgress, setGradingProgress] = useState<ProgressInfo | null>(null);
 
   // TTS state
   const [ttsAudio, setTtsAudio] = useState<string | null>(null);
+  const [ttsSentences, setTtsSentences] = useState<SentenceTiming[]>([]);
   const [isGeneratingTTS, setIsGeneratingTTS] = useState(false);
   const [ttsProgress, setTtsProgress] = useState(0);
+  const [showTTSPlayer, setShowTTSPlayer] = useState(false);
+  const [ttsCurrentWordIndex, setTtsCurrentWordIndex] = useState(-1);
+  const [ttsError, setTtsError] = useState<string | null>(null);
 
   // Right panel tab state (Word List vs Chat)
   const [rightPanelTab, setRightPanelTab] = useState<'words' | 'chat'>('chat');
@@ -157,6 +200,10 @@ export function ArticleDetailPage() {
         const data = await getTTS(id);
         if (data?.audioData) {
           setTtsAudio(data.audioData);
+          // If sentences are returned with the TTS data, use them
+          if (data.sentences && data.sentences.length > 0) {
+            setTtsSentences(data.sentences);
+          }
         }
       } catch {}
     }
@@ -216,6 +263,12 @@ export function ArticleDetailPage() {
   }
 
   const handleWordClick = useCallback((word: string, event: React.MouseEvent) => {
+    // Clear any prefetch timeout
+    if (prefetchTimeoutRef.current) {
+      clearTimeout(prefetchTimeoutRef.current);
+      prefetchTimeoutRef.current = null;
+    }
+
     const rect = (event.target as HTMLElement).getBoundingClientRect();
     setSelectedWord({
       word,
@@ -231,22 +284,57 @@ export function ArticleDetailPage() {
       setDerivationData(null);
       setEtymologyData(null);
       setIsLoadingWord(false);
-    } else {
-      setSavedWord(null);
-      // Check for pending lookup in localStorage
-      const pendingData = loadPendingLookup(word);
-      if (pendingData) {
-        setWordData(pendingData.wordData);
-        setDerivationData(pendingData.derivationData);
-        setEtymologyData(pendingData.etymologyData);
-        setIsLoadingWord(false);
-      } else {
-        setWordData(null);
-        setDerivationData(null);
-        setEtymologyData(null);
-        setIsLoadingWord(true); // Show loading immediately
-      }
+      // Remove from prefetch cache since we have saved word
+      prefetchedWordsRef.current.delete(word.toLowerCase());
+      return;
     }
+
+    // Check in-memory cache first
+    const cachedLookup = wordCache.get(word.toLowerCase());
+    if (cachedLookup) {
+      setSavedWord(null);
+      setWordData(cachedLookup.wordData);
+      setDerivationData(null);
+      setEtymologyData(null);
+      setIsLoadingWord(false);
+      // Update localStorage with cached data
+      savePendingLookup(word, {
+        wordData: cachedLookup.wordData,
+        derivationData: null,
+        etymologyData: null,
+      });
+      // Get context from surrounding text
+      const selection = window.getSelection();
+      const context = selection?.toString() || '';
+      setSelectedWord((prev) => prev ? { ...prev, context } : null);
+      return;
+    }
+
+    // Check for pending lookup in localStorage
+    const pendingData = loadPendingLookup(word);
+    if (pendingData) {
+      setSavedWord(null);
+      setWordData(pendingData.wordData);
+      setDerivationData(pendingData.derivationData);
+      setEtymologyData(pendingData.etymologyData);
+      setIsLoadingWord(false);
+      // Also cache in memory
+      if (pendingData.wordData) {
+        evictCacheIfNeeded();
+        wordCache.set(word.toLowerCase(), { wordData: pendingData.wordData, timestamp: Date.now() });
+      }
+      // Get context from surrounding text
+      const selection = window.getSelection();
+      const context = selection?.toString() || '';
+      setSelectedWord((prev) => prev ? { ...prev, context } : null);
+      return;
+    }
+
+    setSavedWord(null);
+    setWordData(null);
+    setDerivationData(null);
+    setEtymologyData(null);
+    setIsLoadingWord(true); // Show loading immediately
 
     // Get context from surrounding text
     const selection = window.getSelection();
@@ -274,35 +362,48 @@ export function ArticleDetailPage() {
   async function lookupWord(word: string, context: string) {
     if (!article) return;
 
-    try {
-      // Decode article content (base64) - handle both single and double encoding
-      let articleContent = article.content;
+    // Cancel any pending request
+    if (pendingLookupController) {
+      pendingLookupController.abort();
+    }
+    pendingLookupController = new AbortController();
+
+    // Decode article content once and cache it
+    const decodedArticleContent = (() => {
+      let content = article.content;
       try {
-        const decoded = atob(articleContent);
-        // If still looks like base64, decode again
+        const decoded = atob(content);
         if (/^[A-Za-z0-9+/=]+$/.test(decoded) && decoded.length > 10) {
-          articleContent = atob(decoded);
+          content = atob(decoded);
         } else {
-          articleContent = decoded;
+          content = decoded;
         }
       } catch {
         // Content might not be base64 encoded
       }
+      return content;
+    })();
 
+    try {
       const response = await fetch('/api/words/lookup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           word,
           articleId: id,
-          articleContent,
+          articleContent: decodedArticleContent,
           context,
           userInfo,
         }),
+        signal: pendingLookupController.signal,
       });
 
       const data = await response.json();
       if (data.success) {
+        // Cache in memory
+        evictCacheIfNeeded();
+        wordCache.set(word.toLowerCase(), { wordData: data.data, timestamp: Date.now() });
+
         setWordData(data.data);
         // Save to localStorage as pending lookup
         savePendingLookup(word, {
@@ -314,11 +415,94 @@ export function ArticleDetailPage() {
         throw new Error(data.error?.message || 'Failed to lookup word');
       }
     } catch (err) {
+      // Ignore abort errors
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
       console.error('Word lookup error:', err);
     } finally {
       setIsLoadingWord(false);
+      pendingLookupController = null;
     }
   }
+
+  // Prefetch word on hover for faster subsequent clicks
+  const prefetchWord = useCallback((word: string) => {
+    // Skip if already saved, already cached, already prefetched, or currently selected
+    const existingWord = words.find((w) => w.word.toLowerCase() === word.toLowerCase());
+    if (existingWord) return;
+    if (wordCache.has(word.toLowerCase())) return;
+    if (prefetchedWordsRef.current.has(word.toLowerCase())) return;
+    if (selectedWord?.word.toLowerCase() === word.toLowerCase()) return;
+
+    // Mark as prefetched
+    prefetchedWordsRef.current.add(word.toLowerCase());
+
+    // Prefetch after delay
+    const timeoutId = setTimeout(async () => {
+      // Double-check still needed after delay
+      if (wordCache.has(word.toLowerCase())) return;
+      if (selectedWord?.word.toLowerCase() === word.toLowerCase()) return;
+
+      // Decode article content
+      const decodedArticleContent = (() => {
+        let content = article?.content || '';
+        try {
+          const decoded = atob(content);
+          if (/^[A-Za-z0-9+/=]+$/.test(decoded) && decoded.length > 10) {
+            content = atob(decoded);
+          } else {
+            content = decoded;
+          }
+        } catch {
+          // Content might not be base64 encoded
+        }
+        return content;
+      })();
+
+      try {
+        const response = await fetch('/api/words/lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            word,
+            articleId: id,
+            articleContent: decodedArticleContent,
+            context: '',
+            userInfo,
+          }),
+        });
+
+        const data = await response.json();
+        if (data.success && data.data) {
+          // Cache the result silently
+          evictCacheIfNeeded();
+          wordCache.set(word.toLowerCase(), { wordData: data.data, timestamp: Date.now() });
+          // Also save to localStorage
+          savePendingLookup(word, {
+            wordData: data.data,
+            derivationData: null,
+            etymologyData: null,
+          });
+        }
+      } catch (err) {
+        // Silently fail prefetch
+        if (err instanceof Error && err.name === 'AbortError') return;
+        console.debug('Prefetch failed:', err);
+      }
+    }, PREFETCH_HOVER_DELAY_MS);
+
+    prefetchTimeoutRef.current = timeoutId;
+  }, [words, selectedWord, article, id, savePendingLookup]);
+
+  // Cancel prefetch on mouse leave
+  const cancelPrefetch = useCallback((word: string) => {
+    prefetchedWordsRef.current.delete(word.toLowerCase());
+    if (prefetchTimeoutRef.current) {
+      clearTimeout(prefetchTimeoutRef.current);
+      prefetchTimeoutRef.current = null;
+    }
+  }, []);
 
   async function handleAddToWordList() {
     if (!wordData || !id) return;
@@ -481,13 +665,17 @@ export function ArticleDetailPage() {
     setIsGeneratingExercise(true);
     setExerciseAnswers({});
     setExerciseResults(null);
+    setGenerationProgress({ current: 0, total: 0, currentStep: 'Starting...', status: 'generating' });
     try {
-      const newExercise = await generateExercise(id);
+      const newExercise = await generateExercise(id, (progress) => {
+        setGenerationProgress(progress);
+      });
       setExercise(newExercise);
     } catch (err) {
       console.error('Failed to generate exercise:', err);
     } finally {
       setIsGeneratingExercise(false);
+      setGenerationProgress(null);
     }
   }
 
@@ -499,16 +687,30 @@ export function ArticleDetailPage() {
     if (!exercise || exercise.length === 0) return;
 
     setIsSubmittingExercise(true);
+    setGradingProgress({ current: 0, total: 0, currentStep: 'Starting grading...', status: 'grading' });
     try {
-      const answers = Object.values(exerciseAnswers);
+      // Flatten answers: multi-blank questions have string[] values, flatten to single array
+      const rawAnswers = Object.values(exerciseAnswers);
+      const answers: string[] = [];
+      for (const ans of rawAnswers) {
+        if (Array.isArray(ans)) {
+          answers.push(...ans);
+        } else {
+          answers.push(ans);
+        }
+      }
       // Use the first exercise's ID for grading (backend grades all exercises for the article)
-      const results = await submitExercise(exercise[0].id, answers);
+      const sessionId = exercise[0]?.sessionId;
+      const results = await submitExercise(exercise[0].id, answers, sessionId, (progress) => {
+        setGradingProgress(progress);
+      });
       setExercise(results.exercises);
       setExerciseResults(results);
     } catch (err) {
       console.error('Failed to submit exercise:', err);
     } finally {
       setIsSubmittingExercise(false);
+      setGradingProgress(null);
     }
   }
 
@@ -523,6 +725,7 @@ export function ArticleDetailPage() {
     if (!id) return;
     setIsGeneratingTTS(true);
     setTtsProgress(0);
+    setTtsError(null);  // Clear previous errors
     try {
       // Poll progress simulation
       const progressInterval = setInterval(() => {
@@ -533,13 +736,23 @@ export function ArticleDetailPage() {
       const data = await response.json();
 
       clearInterval(progressInterval);
-      setTtsProgress(100);
 
       if (data.success) {
+        setTtsProgress(100);
         setTtsAudio(data.data.audioData);
+        // If sentences are returned with the TTS data, use them
+        if (data.data.sentences && data.data.sentences.length > 0) {
+          setTtsSentences(data.data.sentences);
+        }
+      } else {
+        // API returned error
+        setTtsError(data.error?.message || 'Failed to generate TTS');
+        setTtsProgress(0);
       }
     } catch (err) {
       console.error('Failed to generate TTS:', err);
+      setTtsError('Network error. Please try again.');
+      setTtsProgress(0);
     } finally {
       setIsGeneratingTTS(false);
     }
@@ -547,8 +760,11 @@ export function ArticleDetailPage() {
 
   function handlePlayTTS() {
     if (!ttsAudio) return;
-    const audio = new Audio(`data:audio/mp3;base64,${ttsAudio}`);
-    audio.play();
+    setShowTTSPlayer(true);
+  }
+
+  function handleCloseTTSPlayer() {
+    setShowTTSPlayer(false);
   }
 
   // Decode and render article content
@@ -556,7 +772,7 @@ export function ArticleDetailPage() {
     if (!article) return '';
 
     let content = article.content;
-    // Handle both single and double base64 encoding (legacy data)
+    // Handle base64 encoding (for legacy data) - atob throws if content is already plain text
     try {
       const decoded = atob(content);
       // If the decoded content looks like base64 (only contains base64 chars), decode again
@@ -566,7 +782,7 @@ export function ArticleDetailPage() {
         content = decoded;
       }
     } catch (e) {
-      // Content might not be base64 encoded at all
+      // Content is not base64 encoded (backend now sends decoded content) - use as-is
     }
 
     // Split into paragraphs and make words clickable
@@ -579,6 +795,8 @@ export function ArticleDetailPage() {
             <span key={j}>
               <span
                 onClick={(e) => handleWordClick(cleanWord, e)}
+                onMouseEnter={() => prefetchWord(cleanWord)}
+                onMouseLeave={() => cancelPrefetch(cleanWord)}
                 className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded transition-colors"
               >
                 {word}
@@ -588,6 +806,51 @@ export function ArticleDetailPage() {
         })}
       </p>
     ));
+  }
+
+  // Render TTS-highlighted content (when TTS is playing)
+  function renderTTSHighlightedContent() {
+    if (!ttsSentences || ttsSentences.length === 0) return renderArticleContent();
+
+    const elements: React.ReactNode[] = [];
+    let wordIndex = 0;
+
+    (ttsSentences as Sentence[]).forEach((sentence, sentenceIdx) => {
+      const sentenceWords = sentence.text.split(/(\s+)/).filter(s => s.length > 0);
+
+      sentenceWords.forEach((token, tokenIdx) => {
+        if (/\s+/.test(token)) {
+          // Whitespace
+          elements.push(<span key={`ws-${sentenceIdx}-${tokenIdx}`}>{token}</span>);
+        } else {
+          // Word
+          const isCurrentWord = wordIndex === ttsCurrentWordIndex;
+          const isPastWord = wordIndex < ttsCurrentWordIndex;
+          const highlightClass = isCurrentWord
+            ? 'bg-yellow-400 dark:bg-yellow-500 text-black rounded px-0.5'
+            : isPastWord
+              ? 'text-gray-500 dark:text-gray-400'
+              : '';
+          elements.push(
+            <span
+              key={`word-${sentenceIdx}-${tokenIdx}`}
+              className={`transition-colors duration-100 ${highlightClass}`}
+            >
+              {token}
+            </span>
+          );
+          wordIndex++;
+        }
+      });
+
+      // Add newline after each sentence (except last)
+      if (sentenceIdx < ttsSentences.length - 1) {
+        elements.push(<br key={`br-${sentenceIdx}`} />);
+        elements.push(<span key={`space-${sentenceIdx}`}>{' '}</span>);
+      }
+    });
+
+    return elements;
   }
 
   if (loading) {
@@ -649,6 +912,12 @@ export function ArticleDetailPage() {
                   </div>
                 )}
 
+                {ttsError && (
+                  <div className="text-red-500 text-sm mt-2">
+                    TTS Error: {ttsError}
+                  </div>
+                )}
+
                 {ttsAudio && (
                   <button
                     onClick={handlePlayTTS}
@@ -660,18 +929,31 @@ export function ArticleDetailPage() {
                 )}
 
                 {!exercise || exercise.length === 0 ? (
-                  <button
-                    onClick={handleGenerateExercise}
-                    disabled={isGeneratingExercise}
-                    className="flex items-center gap-2 px-4 py-2 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 text-white rounded-lg transition-colors"
-                  >
-                    {isGeneratingExercise ? (
+                  isGeneratingExercise && generationProgress ? (
+                    <div className="flex items-center gap-2 px-4 py-2 bg-purple-500/80 text-white rounded-lg">
                       <Loader2 className="animate-spin" size={18} />
-                    ) : (
-                      <Sparkles size={18} />
-                    )}
-                    Generate Exercise
-                  </button>
+                      <span>{generationProgress.currentStep}</span>
+                      <div className="w-24 h-2 bg-purple-300/50 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-white transition-all duration-300"
+                          style={{ width: `${generationProgress.total > 0 ? (generationProgress.current / generationProgress.total) * 100 : 50}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleGenerateExercise}
+                      disabled={isGeneratingExercise}
+                      className="flex items-center gap-2 px-4 py-2 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 text-white rounded-lg transition-colors"
+                    >
+                      {isGeneratingExercise ? (
+                        <Loader2 className="animate-spin" size={18} />
+                      ) : (
+                        <Sparkles size={18} />
+                      )}
+                      Generate Exercise
+                    </button>
+                  )
                 ) : exerciseResults ? (
                   <button
                     onClick={handleStartExercise}
@@ -718,7 +1000,7 @@ export function ArticleDetailPage() {
         {/* Article Reader */}
         <div
           ref={containerRef}
-          className="overflow-y-auto p-8"
+          className={`overflow-y-auto p-8 ${showTTSPlayer ? 'pb-24' : ''}`}
           style={{ width: exerciseMode ? '50%' : `${leftPanelWidth}%` }}
         >
           <article className="max-w-3xl mx-auto bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-xl border border-gray-200 dark:border-gray-700 p-8">
@@ -733,7 +1015,7 @@ export function ArticleDetailPage() {
               )}
             </header>
             <div className="prose dark:prose-invert max-w-none">
-              {renderArticleContent()}
+              {showTTSPlayer ? renderTTSHighlightedContent() : renderArticleContent()}
             </div>
           </article>
         </div>
@@ -871,13 +1153,51 @@ export function ArticleDetailPage() {
                 // Results view
                 <div className="space-y-6">
                   <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-                    <h3 className="text-3xl font-bold mb-2">
-                      Score: {exerciseResults.grading?.totalScore}/100
-                    </h3>
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-3xl font-bold mb-1">
+                          Score: {exerciseResults.grading?.totalScore}/100
+                        </h3>
+                        <p className="text-gray-500 dark:text-gray-400">
+                          IELTS Band Score: {exerciseResults.grading?.bandScore}/9
+                        </p>
+                      </div>
+                      <div className={`text-5xl font-bold ${
+                        (exerciseResults.grading?.bandScore || 0) >= 7 ? 'text-green-500' :
+                        (exerciseResults.grading?.bandScore || 0) >= 5 ? 'text-yellow-500' :
+                        'text-red-500'
+                      }`}>
+                        {exerciseResults.grading?.bandScore || 0}
+                      </div>
+                    </div>
+
                     {exerciseResults.grading?.overallComment && (
-                      <p className="text-gray-600 dark:text-gray-400">
+                      <p className="text-gray-600 dark:text-gray-400 mb-4">
                         {exerciseResults.grading.overallComment}
                       </p>
+                    )}
+
+                    {/* Strengths and Areas for Improvement */}
+                    {exerciseResults.grading?.strengths?.length > 0 && (
+                      <div className="mb-4">
+                        <h4 className="font-medium text-green-600 dark:text-green-400 mb-1">Strengths:</h4>
+                        <ul className="list-disc list-inside text-sm text-gray-600 dark:text-gray-400">
+                          {exerciseResults.grading.strengths.map((strength: string, i: number) => (
+                            <li key={i}>{strength}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {exerciseResults.grading?.areasForImprovement?.length > 0 && (
+                      <div>
+                        <h4 className="font-medium text-orange-600 dark:text-orange-400 mb-1">Areas for Improvement:</h4>
+                        <ul className="list-disc list-inside text-sm text-gray-600 dark:text-gray-400">
+                          {exerciseResults.grading.areasForImprovement.map((area: string, i: number) => (
+                            <li key={i}>{area}</li>
+                          ))}
+                        </ul>
+                      </div>
                     )}
                   </div>
 
@@ -892,18 +1212,47 @@ export function ArticleDetailPage() {
                         }`}
                       >
                         <div className="flex items-start justify-between mb-2">
-                          <span className="font-medium">Question {index + 1}</span>
-                          <span className={`px-2 py-0.5 text-xs rounded-full ${
-                            result.correct
-                              ? 'bg-green-100 dark:bg-green-900/50 text-green-600 dark:text-green-400'
-                              : 'bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400'
-                          }`}>
-                            {result.correct ? 'Correct' : 'Incorrect'}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">Question {index + 1}</span>
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${
+                              result.type === 'choice' ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-600' :
+                              result.type === 'fill_blank' ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600' :
+                              result.type === 'open_ended' ? 'bg-green-100 dark:bg-green-900/50 text-green-600' :
+                              result.type === 'translation' ? 'bg-orange-100 dark:bg-orange-900/50 text-orange-600' :
+                              result.type === 'word_explanation' ? 'bg-pink-100 dark:bg-pink-900/50 text-pink-600' :
+                              result.type === 'sentence_imitation' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600' :
+                              'bg-gray-100 dark:bg-gray-700 text-gray-600'
+                            }`}>
+                              {result.type}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-sm font-medium ${
+                              (result.score || 0) >= 70 ? 'text-green-600' :
+                              (result.score || 0) >= 40 ? 'text-yellow-600' :
+                              'text-red-600'
+                            }`}>
+                              {result.score}/{result.maxScore}
+                            </span>
+                            <span className={`px-2 py-0.5 text-xs rounded-full ${
+                              result.correct
+                                ? 'bg-green-100 dark:bg-green-900/50 text-green-600 dark:text-green-400'
+                                : 'bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400'
+                            }`}>
+                              {result.correct ? 'Correct' : 'Incorrect'}
+                            </span>
+                          </div>
                         </div>
-                        <p className="text-sm mb-2">Your answer: {result.userAnswer}</p>
+                        <p className="text-sm mb-1">
+                          <span className="font-medium">Your answer:</span> {result.userAnswer}
+                        </p>
+                        {result.expectedAnswer && !result.correct && (
+                          <p className="text-sm mb-1">
+                            <span className="font-medium">Expected:</span> {result.expectedAnswer}
+                          </p>
+                        )}
                         {result.comment && (
-                          <p className="text-sm text-gray-600 dark:text-gray-400">
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
                             {result.comment}
                           </p>
                         )}
@@ -924,55 +1273,205 @@ export function ArticleDetailPage() {
                           {index + 1}
                         </span>
                         <div className="flex-1">
-                          <p className="font-medium mb-3">
-                            {ex.questionContent.replace(/<!--BOX-->/g, '______')}
-                          </p>
+                          {/* Question type badge */}
+                          <div className="mb-2">
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${
+                              ex.type === 'choice' ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400' :
+                              ex.type === 'fill_blank' ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400' :
+                              ex.type === 'open_ended' ? 'bg-green-100 dark:bg-green-900/50 text-green-600 dark:text-green-400' :
+                              ex.type === 'translation' ? 'bg-orange-100 dark:bg-orange-900/50 text-orange-600 dark:text-orange-400' :
+                              ex.type === 'word_explanation' ? 'bg-pink-100 dark:bg-pink-900/50 text-pink-600 dark:text-pink-400' :
+                              ex.type === 'sentence_imitation' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400' :
+                              'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                            }`}>
+                              {ex.type === 'choice' ? 'Multiple Choice' :
+                               ex.type === 'fill_blank' ? 'Fill in the Blank' :
+                               ex.type === 'open_ended' ? 'Open-ended' :
+                               ex.type === 'translation' ? 'Translation' :
+                               ex.type === 'word_explanation' ? 'Word Explanation' :
+                               ex.type === 'sentence_imitation' ? 'Sentence Imitation' :
+                               ex.type}
+                            </span>
+                          </div>
 
-                          {ex.options ? (
-                            <div className="space-y-2">
-                              {ex.options.map((option: string, optIndex: number) => (
-                                <label
-                                  key={optIndex}
-                                  className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
-                                >
+                          {/* Render question based on type */}
+                          {ex.type === 'choice' && (
+                            <>
+                              <p className="font-medium mb-3">
+                                {typeof ex.questionContent === 'string'
+                                  ? ex.questionContent.replace(/<!--BOX-->/g, '______')
+                                  : String(ex.questionContent)}
+                              </p>
+                              <div className="space-y-2">
+                                {ex.options?.map((option: string, optIndex: number) => (
+                                  <label
+                                    key={optIndex}
+                                    className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`question-${index}`}
+                                      value={option}
+                                      checked={exerciseAnswers[index] === option}
+                                      onChange={() => setExerciseAnswers((prev) => ({ ...prev, [index]: option }))}
+                                      className="w-4 h-4"
+                                    />
+                                    <span>{option}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </>
+                          )}
+
+                          {ex.type === 'fill_blank' && (
+                            <>
+                              <p className="font-medium mb-3">
+                                {typeof ex.questionContent === 'string'
+                                  ? ex.questionContent.replace(/<!--BLANK-->/g, '______')
+                                  : String(ex.questionContent)}
+                              </p>
+                              <div className="space-y-2">
+                                {Array.from({ length: ex.partialScoring?.totalBlanks || 1 }).map((_, blankIndex) => (
                                   <input
-                                    type="radio"
-                                    name={`question-${index}`}
-                                    value={option}
-                                    checked={exerciseAnswers[index] === option}
-                                    onChange={() => setExerciseAnswers((prev) => ({ ...prev, [index]: option }))}
-                                    className="w-4 h-4"
+                                    key={blankIndex}
+                                    type="text"
+                                    placeholder={`Answer for blank ${blankIndex + 1}...`}
+                                    value={(Array.isArray(exerciseAnswers[index]) ? exerciseAnswers[index][blankIndex] : '') || ''}
+                                    onChange={(e) => {
+                                      const currentAnswers = Array.isArray(exerciseAnswers[index])
+                                        ? [...exerciseAnswers[index]]
+                                        : Array(ex.partialScoring?.totalBlanks || 1).fill('');
+                                      currentAnswers[blankIndex] = e.target.value;
+                                      setExerciseAnswers((prev) => ({ ...prev, [index]: currentAnswers }));
+                                    }}
+                                    className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                   />
-                                  <span>{option}</span>
-                                </label>
-                              ))}
-                            </div>
-                          ) : (
-                            <input
-                              type="text"
-                              placeholder="Your answer..."
-                              value={exerciseAnswers[index] || ''}
-                              onChange={(e) => setExerciseAnswers((prev) => ({ ...prev, [index]: e.target.value }))}
-                              className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
+                                ))}
+                              </div>
+                            </>
+                          )}
+
+                          {ex.type === 'open_ended' && (
+                            <>
+                              <p className="font-medium mb-3">
+                                {typeof ex.questionContent === 'string'
+                                  ? ex.questionContent
+                                  : String(ex.questionContent)}
+                              </p>
+                              <textarea
+                                rows={4}
+                                placeholder="Write your answer here..."
+                                value={typeof exerciseAnswers[index] === 'string' ? exerciseAnswers[index] : ''}
+                                onChange={(e) => setExerciseAnswers((prev) => ({ ...prev, [index]: e.target.value }))}
+                                className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                              />
+                              {ex.sampleAnswer && (
+                                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                                  Sample reference (not shown during exercise): {typeof ex.sampleAnswer === 'string' ? ex.sampleAnswer : JSON.stringify(ex.sampleAnswer)}
+                                </p>
+                              )}
+                            </>
+                          )}
+
+                          {ex.type === 'translation' && (
+                            <>
+                              {typeof ex.questionContent === 'object' && ex.questionContent ? (
+                                <div className="mb-3">
+                                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
+                                    {ex.questionContent.direction === 'to_native'
+                                      ? `Translate to ${userInfo?.nativeLanguage || 'your native language'}:`
+                                      : `Translate to ${userInfo?.targetLanguage || 'target language'}:`}
+                                  </p>
+                                  <p className="font-medium text-lg">
+                                    {ex.questionContent.text}
+                                  </p>
+                                </div>
+                              ) : (
+                                <p className="font-medium mb-3">{String(ex.questionContent)}</p>
+                              )}
+                              <input
+                                type="text"
+                                placeholder="Your translation..."
+                                value={typeof exerciseAnswers[index] === 'string' ? exerciseAnswers[index] : ''}
+                                onChange={(e) => setExerciseAnswers((prev) => ({ ...prev, [index]: e.target.value }))}
+                                className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                            </>
+                          )}
+
+                          {ex.type === 'word_explanation' && (
+                            <>
+                              <p className="font-medium mb-3">
+                                {typeof ex.questionContent === 'string'
+                                  ? ex.questionContent
+                                  : String(ex.questionContent)}
+                              </p>
+                              <textarea
+                                rows={3}
+                                placeholder="Explain the meaning..."
+                                value={typeof exerciseAnswers[index] === 'string' ? exerciseAnswers[index] : ''}
+                                onChange={(e) => setExerciseAnswers((prev) => ({ ...prev, [index]: e.target.value }))}
+                                className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                              />
+                            </>
+                          )}
+
+                          {ex.type === 'sentence_imitation' && (
+                            <>
+                              {typeof ex.questionContent === 'object' && ex.questionContent ? (
+                                <div className="mb-3">
+                                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Example sentence:</p>
+                                  <p className="font-medium italic text-lg mb-2">
+                                    "{ex.questionContent.example}"
+                                  </p>
+                                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                                    {ex.questionContent.instruction || 'Imitate the structure to create your own sentence'}
+                                  </p>
+                                </div>
+                              ) : (
+                                <p className="font-medium mb-3">{String(ex.questionContent)}</p>
+                              )}
+                              <textarea
+                                rows={3}
+                                placeholder="Write your imitation sentence..."
+                                value={typeof exerciseAnswers[index] === 'string' ? exerciseAnswers[index] : ''}
+                                onChange={(e) => setExerciseAnswers((prev) => ({ ...prev, [index]: e.target.value }))}
+                                className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                              />
+                            </>
                           )}
                         </div>
                       </div>
                     </div>
                   ))}
 
-                  <button
-                    onClick={handleSubmitExercise}
-                    disabled={isSubmittingExercise || Object.keys(exerciseAnswers).length === 0}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 text-white rounded-lg transition-colors"
-                  >
-                    {isSubmittingExercise ? (
-                      <Loader2 className="animate-spin" size={20} />
-                    ) : (
-                      <Send size={20} />
-                    )}
-                    Submit Answers
-                  </button>
+                  {isSubmittingExercise && gradingProgress ? (
+                    <div className="flex flex-col items-center gap-2 px-6 py-4 bg-blue-500/80 text-white rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <Loader2 className="animate-spin" size={20} />
+                        <span className="font-medium">{gradingProgress.currentStep}</span>
+                      </div>
+                      <div className="w-full max-w-xs h-2 bg-blue-300/50 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-white transition-all duration-300"
+                          style={{ width: `${gradingProgress.total > 0 ? (gradingProgress.current / gradingProgress.total) * 100 : 50}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleSubmitExercise}
+                      disabled={isSubmittingExercise || Object.keys(exerciseAnswers).length === 0}
+                      className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 text-white rounded-lg transition-colors"
+                    >
+                      {isSubmittingExercise ? (
+                        <Loader2 className="animate-spin" size={20} />
+                      ) : (
+                        <Send size={20} />
+                      )}
+                      Submit Answers
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="text-center py-12 text-gray-500 dark:text-gray-400">
@@ -1002,6 +1501,19 @@ export function ArticleDetailPage() {
           etymologyData={etymologyData}
           userInfo={userInfo || undefined}
         />
+      )}
+
+      {/* TTS Floating Player Bar */}
+      {showTTSPlayer && ttsAudio && (
+        <div className="fixed bottom-0 left-0 right-0 z-50">
+          <TTSPlayer
+            audioData={ttsAudio}
+            sentences={ttsSentences}
+            onClose={handleCloseTTSPlayer}
+            onWordIndexChange={setTtsCurrentWordIndex}
+            compact={true}
+          />
+        </div>
       )}
     </div>
   );

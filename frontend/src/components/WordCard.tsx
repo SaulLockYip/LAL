@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import { X, Plus, ChevronDown, BookOpen, History, Volume2, Quote, RefreshCw } from 'lucide-react';
 import { WordLookupResult, DerivationEtymologyResult, Word } from '../services/api';
 
@@ -25,7 +25,7 @@ interface WordCardProps {
   userInfo?: UserInfo;
 }
 
-export function WordCard({
+export const WordCard = memo(function WordCard({
   wordData,
   savedWord,
   position: _position,
@@ -486,4 +486,4 @@ export function WordCard({
       )}
     </div>
   );
-}
+});

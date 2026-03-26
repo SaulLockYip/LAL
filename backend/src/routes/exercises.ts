@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { prisma, generateExercises, gradeExercises, GradingResult } from '../services/ai.js';
+import { prisma, generateExercises, gradeExercises, GradingResult, ExerciseType } from '../services/ai.js';
 
 export const exercisesRouter = Router();
 
@@ -62,6 +62,36 @@ exercisesRouter.post('/generate', async (req: Request, res: Response) => {
       }))
     );
 
+    // Determine total number of exercises to be generated for progress tracking
+    const counts = {
+      choice: options?.countPerType?.choice ?? 2,
+      fill_blank: options?.countPerType?.fill_blank ?? 2,
+      open_ended: options?.countPerType?.open_ended ?? 1,
+      translation: options?.countPerType?.translation ?? 1,
+      word_explanation: options?.countPerType?.word_explanation ?? 1,
+      sentence_imitation: options?.countPerType?.sentence_imitation ?? 1,
+    };
+    const totalExercises = Object.values(counts).reduce((a, b) => a + b, 0);
+
+    // Generate a session ID to group exercises taken together
+    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    // Set headers for streaming response
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // Send initial progress response using write (not json(), which ends the response)
+    res.write(JSON.stringify(successResponse({
+      progress: {
+        current: 0,
+        total: totalExercises,
+        currentStep: 'Preparing to generate exercises...',
+        status: 'generating'
+      }
+    })) + '\n');
+
     // Generate exercises using AI with proper language settings
     const decodedContent = decodeBase64Content(article.content);
     const exercises = await generateExercises(decodedContent, wordListJson, {
@@ -71,46 +101,85 @@ exercisesRouter.post('/generate', async (req: Request, res: Response) => {
       countPerType: options?.countPerType,
     });
 
-    // Generate a session ID to group exercises taken together
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    // Build generation progress steps
+    const exerciseTypes: Record<ExerciseType, string> = {
+      'choice': 'Multiple Choice',
+      'fill_blank': 'Fill in the Blank',
+      'open_ended': 'Open-ended Question',
+      'translation': 'Translation',
+      'word_explanation': 'Word Explanation',
+      'sentence_imitation': 'Sentence Imitation',
+    };
 
     // Store exercises in database with all metadata
-    const createdExercises = await Promise.all(
-      exercises.map(ex =>
-        prisma.exercise.create({
-          data: {
-            articleId,
-            type: ex.type,
-            questionContent: typeof ex.question === 'object'
-              ? JSON.stringify(ex.question)
-              : ex.question,
-            options: ex.options ? JSON.stringify(ex.options) : null,
-            correctAnswers: ex.correctAnswers ? JSON.stringify(ex.correctAnswers) : null,
-            rubric: ex.rubric ? JSON.stringify(ex.rubric) : null,
-            sampleAnswer: ex.sampleAnswer ? JSON.stringify(ex.sampleAnswer) : null,
-            partialScoring: ex.blanks ? JSON.stringify({ totalBlanks: ex.blanks }) : null,
-            explanation: ex.explanation || null,
-            status: 'pending',
-            sessionId,
-          },
-        })
-      )
-    );
+    const createdExercises: Array<{
+      id: number;
+      articleId: number;
+      type: string;
+      questionContent: string;
+      options: string | null;
+      correctAnswers: string | null;
+      explanation: string | null;
+      status: string;
+      sessionId: string;
+    }> = [];
 
-    // Return exercises with parsed JSON fields for frontend
-    const exercisesForClient = createdExercises.map(ex => ({
-      id: ex.id,
-      articleId: ex.articleId,
-      type: ex.type,
-      questionContent: parseQuestionContent(ex.questionContent, ex.type),
-      options: ex.options ? JSON.parse(ex.options) : null,
-      correctAnswers: ex.correctAnswers ? JSON.parse(ex.correctAnswers) : null,
-      explanation: ex.explanation,
-      status: ex.status,
-      sessionId: ex.sessionId,
-    }));
+    for (let i = 0; i < exercises.length; i++) {
+      const ex = exercises[i];
+      const typeLabel = exerciseTypes[ex.type] || ex.type;
 
-    res.json(successResponse(exercisesForClient));
+      // Send progress update for each exercise being stored
+      res.write(JSON.stringify(successResponse({
+        progress: {
+          current: i + 1,
+          total: totalExercises,
+          currentStep: `Storing ${typeLabel} question ${i + 1} of ${totalExercises}...`,
+          status: 'generating'
+        }
+      })) + '\n');
+
+      const created = await prisma.exercise.create({
+        data: {
+          articleId,
+          type: ex.type,
+          questionContent: typeof ex.question === 'object'
+            ? JSON.stringify(ex.question)
+            : ex.question,
+          options: ex.options ? JSON.stringify(ex.options) : null,
+          correctAnswers: ex.correctAnswers ? JSON.stringify(ex.correctAnswers) : null,
+          rubric: ex.rubric ? JSON.stringify(ex.rubric) : null,
+          sampleAnswer: ex.sampleAnswer ? JSON.stringify(ex.sampleAnswer) : null,
+          partialScoring: ex.blanks ? JSON.stringify({ totalBlanks: ex.blanks }) : null,
+          explanation: ex.explanation || null,
+          status: 'pending',
+          sessionId,
+        },
+      });
+      createdExercises.push(created);
+    }
+
+    // Send final response with all exercises
+    res.write(JSON.stringify(successResponse({
+      progress: {
+        current: totalExercises,
+        total: totalExercises,
+        currentStep: `Generated ${totalExercises} exercises successfully!`,
+        status: 'completed'
+      },
+      exercises: createdExercises.map(ex => ({
+        id: ex.id,
+        articleId: ex.articleId,
+        type: ex.type,
+        questionContent: parseQuestionContent(ex.questionContent, ex.type),
+        options: ex.options ? JSON.parse(ex.options) : null,
+        correctAnswers: ex.correctAnswers ? JSON.parse(ex.correctAnswers) : null,
+        explanation: ex.explanation,
+        status: ex.status,
+        sessionId: ex.sessionId,
+      })),
+      sessionId,
+    })) + '\n');
+    res.end();
     return;
   } catch (error) {
     console.error('Error generating exercises:', error);
@@ -187,6 +256,22 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
     // Decode article content BEFORE passing to grading
     const decodedContent = decodeBase64Content(article.content);
 
+    // Set headers for streaming response
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // Send initial progress response using write
+    res.write(JSON.stringify(successResponse({
+      progress: {
+        current: 0,
+        total: allExercises.length,
+        currentStep: 'Preparing to grade exercises...',
+        status: 'grading'
+      }
+    })) + '\n');
+
     // Build exercises JSON with full metadata for grading
     const exercisesJson = JSON.stringify(
       allExercises.map((ex, idx) => ({
@@ -213,6 +298,16 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
       }))
     );
 
+    // Send progress: starting AI grading
+    res.write(JSON.stringify(successResponse({
+      progress: {
+        current: 0,
+        total: allExercises.length,
+        currentStep: `Grading ${allExercises.length} exercises with AI...`,
+        status: 'grading'
+      }
+    })) + '\n');
+
     // Grade with AI (pass decoded content, not base64)
     const gradingResult = await gradeExercises(
       exercisesJson,
@@ -234,22 +329,60 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
       }
     }
 
-    // Update all exercises with their individual grading results
-    const updatedExercises = await Promise.all(
-      allExercises.map((ex) => {
-        const result = gradingMap.get(ex.id);
-        return prisma.exercise.update({
-          where: { id: ex.id },
-          data: {
-            status: 'graded',
-            score: result?.score ?? null,
-            bandScore: result?.bandScore ?? null,
-            comments: result?.comment ?? gradingResult.overallComment,
-            analysis: result?.analysis ? JSON.stringify(result.analysis) : null,
-          },
-        });
-      })
-    );
+    // Exercise type labels for progress display
+    const exerciseTypes: Record<string, string> = {
+      'choice': 'Multiple Choice',
+      'fill_blank': 'Fill in the Blank',
+      'open_ended': 'Open-ended Question',
+      'translation': 'Translation',
+      'word_explanation': 'Word Explanation',
+      'sentence_imitation': 'Sentence Imitation',
+    };
+
+    // Update all exercises with their individual grading results and send progress
+    const updatedExercises: Array<{
+      id: number;
+      articleId: number;
+      type: string;
+      questionContent: string;
+      options: string | null;
+      correctAnswers: string | null;
+      explanation: string | null;
+      status: string;
+      score: number | null;
+      bandScore: number | null;
+      comments: string | null;
+      analysis: string | null;
+      sessionId: string;
+    }> = [];
+
+    for (let i = 0; i < allExercises.length; i++) {
+      const ex = allExercises[i];
+      const result = gradingMap.get(ex.id);
+      const typeLabel = exerciseTypes[ex.type] || ex.type;
+
+      // Send progress update for each exercise being graded
+      res.write(JSON.stringify(successResponse({
+        progress: {
+          current: i + 1,
+          total: allExercises.length,
+          currentStep: `Grading ${typeLabel} question ${i + 1} of ${allExercises.length}...`,
+          status: 'grading'
+        }
+      })) + '\n');
+
+      const updated = await prisma.exercise.update({
+        where: { id: ex.id },
+        data: {
+          status: 'graded',
+          score: result?.score ?? null,
+          bandScore: result?.bandScore ?? null,
+          comments: result?.comment ?? gradingResult.overallComment,
+          analysis: result?.analysis ? JSON.stringify(result.analysis) : null,
+        },
+      });
+      updatedExercises.push(updated);
+    }
 
     // Return updated exercises with parsed fields and grading summary
     const exercisesForClient = updatedExercises.map(ex => ({
@@ -268,7 +401,14 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
       sessionId: ex.sessionId,
     }));
 
-    res.json(successResponse({
+    // Send final response
+    res.write(JSON.stringify(successResponse({
+      progress: {
+        current: allExercises.length,
+        total: allExercises.length,
+        currentStep: `Graded ${allExercises.length} exercises successfully!`,
+        status: 'completed'
+      },
       exercises: exercisesForClient,
       grading: {
         totalScore: gradingResult.totalScore,
@@ -277,7 +417,8 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
         strengths: gradingResult.strengths,
         areasForImprovement: gradingResult.areasForImprovement,
       },
-    }));
+    })) + '\n');
+    res.end();
     return;
   } catch (error) {
     console.error('Error grading exercise:', error);
