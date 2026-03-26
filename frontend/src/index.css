@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+@plugin "@tailwindcss/vite";
+
+/* Force class-based dark mode */
+@custom-variant dark (&:where(.dark, .dark *));

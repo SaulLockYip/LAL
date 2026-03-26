@@ -1,0 +1,103 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             Int    @id @default(autoincrement())
+  name           String
+  nativeLanguage String
+  targetLanguage String
+  currentLevel   String
+  voice          String?
+
+  @@map("user")
+}
+
+model Article {
+  id                   String    @id @default(uuid())
+  title                String
+  content              String
+  source               String
+  notes                String
+  createdAt            DateTime  @default(now())
+  archived             Boolean   @default(false)
+  level                String
+  currentSessionFilePath String?
+  wordLists            WordList[]
+  exercises            Exercise[]
+
+  @@map("articles")
+}
+
+model WordList {
+  id            Int     @id @default(autoincrement())
+  articleId     String
+  word          String
+  partOfSpeech  String?
+  phonetic      String?
+  definition    String?
+  translation   String?
+  exampleSentence String?
+  field         String?
+  inflections   String?
+  synonyms      String?
+  phrases       String?
+  derivation    String?
+  etymology     String?
+  article       Article? @relation(fields: [articleId], references: [id])
+
+  @@map("word_list")
+}
+
+model Exercise {
+  id              Int      @id @default(autoincrement())
+  articleId       String
+  type            String
+  questionContent String
+  options         String?
+  correctAnswers  String?
+  explanation     String?
+  status          String   @default("pending")
+  score           Int?
+  comments        String?
+  article         Article? @relation(fields: [articleId], references: [id])
+
+  @@map("exercises")
+}
+
+model AISetting {
+  id        Int    @id @default(autoincrement())
+  name      String @unique
+  provider  String
+  modelName String
+  baseUrl   String
+  apiKey    String
+  ttsApiKey String?
+
+  // TTS Settings
+  ttsVoiceId         String?  @default("Chinese (Mandarin)_Reliable_Executive")
+  ttsSpeed           Float?   @default(1.0)
+  ttsVol             Float?   @default(10.0)
+  ttsPitch           Int?     @default(0)
+  ttsEmotion         String?
+  ttsAudioSampleRate Int?     @default(32000)
+  ttsBitrate         Int?     @default(128000)
+  ttsChannel         Int?     @default(1)
+  ttsSoundEffects    String?
+
+  @@map("models")
+}
+
+model TTS {
+  id        String   @id @default(uuid())
+  articleId String   @unique
+  audioData String   // base64 encoded mp3
+  createdAt DateTime @default(now())
+
+  @@map("tts")
+}
