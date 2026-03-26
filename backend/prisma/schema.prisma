@@ -57,15 +57,23 @@ model WordList {
 model Exercise {
   id              Int      @id @default(autoincrement())
   articleId       String
-  type            String
-  questionContent String
-  options         String?
-  correctAnswers  String?
+  type            String   // 'choice' | 'fill_blank' | 'open_ended' | 'translation' | 'word_explanation' | 'sentence_imitation'
+  questionContent String   // Main question text (may contain <!--BLANK--> markers for multiple fill-in-blank)
+  options         String?  // JSON array for choice questions
+  correctAnswers  String?  // JSON array of correct answers (for objective questions)
+  rubric          String?  // JSON object with scoring criteria
+  sampleAnswer    String?  // JSON object with sample answer(s) for open-ended
+  partialScoring  String?  // JSON object with partial credit information
   explanation     String?
   status          String   @default("pending")
-  score           Int?
-  comments        String?
+  score           Int?     // Score as percentage (0-100) or raw points
+  bandScore       Int?     // IELTS band score (0-9)
+  comments        String?  // Grading feedback
+  createdAt       DateTime @default(now())
   article         Article? @relation(fields: [articleId], references: [id])
+
+  // For tracking exercise sessions (group of exercises taken together)
+  sessionId       String?
 
   @@map("exercises")
 }
@@ -94,10 +102,11 @@ model AISetting {
 }
 
 model TTS {
-  id        String   @id @default(uuid())
-  articleId String   @unique
-  audioData String   // base64 encoded mp3
-  createdAt DateTime @default(now())
+  id             String   @id @default(uuid())
+  articleId      String   @unique
+  audioData      String   // base64 encoded mp3
+  sentenceData   String?  // JSON string of sentence timings
+  createdAt      DateTime @default(now())
 
   @@map("tts")
 }

@@ -1,5 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../services/ai.js';
+import { parseSRT, parseMiniMaxTitles, sentenceTimingsToJSON } from '../utils/srtParser.js';
+import * as tarStream from 'tar-stream';
+import type { Extract } from 'tar-stream';
+import { Readable } from 'stream';
 
 export const articlesRouter = Router();
 
@@ -10,6 +14,22 @@ function successResponse(data: unknown) {
 
 function errorResponse(code: string, message: string) {
   return { success: false, error: { code, message } };
+}
+
+// MiniMax API response types
+interface MiniMaxTTSCreateResponse {
+  base_resp?: {
+    status_code: number;
+    status_msg?: string;
+  };
+  task_id?: string;
+}
+
+interface MiniMaxTTSQueryResponse {
+  status: string;
+  file_id?: string;
+  subtitle_file_id?: string;
+  status_msg?: string;
 }
 
 // Decode article content (handle base64 encoding)
@@ -41,6 +61,76 @@ async function pollWithTimeout<T>(
     await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
   throw new Error('Polling timed out');
+}
+
+// Extract MP3 and titles from tar archive in a single pass (MiniMax returns tar when subtitle is requested)
+async function extractFromTar(buffer: Buffer): Promise<{ audioBuffer: Buffer; subtitleText?: string }> {
+  return new Promise((resolve, reject) => {
+    const extract: Extract = tarStream.extract();
+    let audioBuffer: Buffer | null = null;
+    let subtitleText: string | undefined = undefined;
+    let rejected = false;
+
+    extract.on('entry', (header, stream, next) => {
+      const chunks: Buffer[] = [];
+
+      stream.on('data', (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+
+      stream.on('end', () => {
+        if (rejected) {
+          next();
+          return;
+        }
+        const content = Buffer.concat(chunks);
+        // Look for the file with the target extension
+        if (header.name.endsWith('.mp3')) {
+          audioBuffer = content;
+        } else if (header.name.endsWith('.titles')) {
+          subtitleText = content.toString('utf-8');
+        }
+        next();
+      });
+
+      stream.on('error', (err) => {
+        if (!rejected) {
+          rejected = true;
+          reject(err);
+        }
+      });
+    });
+
+    extract.on('finish', () => {
+      if (rejected) return;
+      if (audioBuffer) {
+        resolve({ audioBuffer, subtitleText });
+      } else {
+        reject(new Error('No .mp3 file found in tar archive'));
+      }
+    });
+
+    extract.on('error', (err) => {
+      if (!rejected) {
+        rejected = true;
+        reject(err);
+      }
+    });
+
+    // Pipe the buffer into the tar extractor
+    const readable = Readable.from(buffer);
+    readable.pipe(extract);
+  });
+}
+
+// Check if buffer is a valid tar archive (starts with tar magic number)
+function isTarBuffer(buffer: Buffer): boolean {
+  // TAR format: pre-POSIX ustar starts with 257 "ustar", POSIX starts with 257 "ustar\x00"
+  // The first 257 bytes are the magic, but a simple check is to look for "ustar" near byte 257
+  if (buffer.length < 512) return false;
+  // Check for "ustar" at offset 257 (257-262 in 0-indexed)
+  const magic = buffer.toString('ascii', 257, 262);
+  return magic === 'ustar';
 }
 
 // GET /api/articles - List articles with search/filter/sort
@@ -148,7 +238,14 @@ articlesRouter.get('/:id', async (req: Request, res: Response) => {
       return;
     }
 
-    res.json(successResponse(article));
+    // Decode base64-encoded content before sending to frontend
+    const decodedContent = decodeArticleContent(article.content);
+    const articleWithDecodedContent = {
+      ...article,
+      content: decodedContent,
+    };
+
+    res.json(successResponse(articleWithDecodedContent));
     return;
   } catch (error) {
     console.error('Error getting article:', error);
@@ -215,8 +312,18 @@ articlesRouter.post('/:id/tts', async (req: Request, res: Response) => {
       where: { name: 'default' },
     });
 
-    // Use ttsApiKey if set, otherwise fallback to apiKey, then to hardcoded key
-    const apiKey = aiSetting?.ttsApiKey || aiSetting?.apiKey || 'sk-cp-Lq2PlyRtE-o2yibZjqeyFjIAMYg1N-N9UIuh_Oxrf2DIvJkwyvP5mRAVeq18Ax2RIuJ-3x8IVDrXtswpa-322Dg0SNt0gtvlHTphMjkARSy4LumKU8RIsS8';
+    // Validate that settings exist
+    if (!aiSetting) {
+      res.status(500).json(errorResponse('CONFIG_ERROR', 'AI settings not configured. Please set up AI settings in the database.'));
+      return;
+    }
+
+    // Use ttsApiKey if set, otherwise use apiKey
+    const apiKey = aiSetting.ttsApiKey || aiSetting.apiKey;
+    if (!apiKey) {
+      res.status(500).json(errorResponse('CONFIG_ERROR', 'No API key configured. Please set ttsApiKey or apiKey in AI settings.'));
+      return;
+    }
 
     // Decode article content
     const articleContent = decodeArticleContent(article.content);
@@ -242,6 +349,9 @@ articlesRouter.post('/:id/tts', async (req: Request, res: Response) => {
         format: 'mp3',
         channel: aiSetting?.ttsChannel ?? 1,
       },
+      output_format: {
+        subtitle: true,
+      },
       language_boost: targetLanguage,
     };
 
@@ -262,18 +372,22 @@ articlesRouter.post('/:id/tts', async (req: Request, res: Response) => {
       return;
     }
 
-    const createData = await createResponse.json();
+    const createData = await createResponse.json() as MiniMaxTTSCreateResponse;
 
-    if (createData.base_resp.status_code !== 0) {
-      console.error('MiniMax TTS error:', createData.base_resp.status_msg);
-      res.status(500).json(errorResponse('TTS_API_ERROR', createData.base_resp.status_msg || 'Failed to create TTS task'));
+    if (createData.base_resp?.status_code !== 0) {
+      console.error('MiniMax TTS error:', createData.base_resp?.status_msg);
+      res.status(500).json(errorResponse('TTS_API_ERROR', createData.base_resp?.status_msg || 'Failed to create TTS task'));
       return;
     }
 
     const taskId = createData.task_id;
+    if (!taskId) {
+      res.status(500).json(errorResponse('TTS_API_ERROR', 'No task_id in response'));
+      return;
+    }
 
-    // Poll for completion
-    const pollResponse = await pollWithTimeout<{ status: string; file_id?: string; status_msg?: string }>(
+    // Poll for completion - reduced polling to avoid hitting API limits
+    const pollResponse = await pollWithTimeout<{ status: string; file_id?: string; subtitle_file_id?: string; status_msg?: string }>(
       async () => {
         try {
           const resp = await fetch(`https://api.minimaxi.com/v1/query/t2a_async_query_v2?task_id=${taskId}`, {
@@ -282,27 +396,29 @@ articlesRouter.post('/:id/tts', async (req: Request, res: Response) => {
             },
           });
           if (!resp.ok) return null;
-          return await resp.json();
+          return await resp.json() as MiniMaxTTSQueryResponse;
         } catch {
           return null;
         }
       },
-      (result) => result.status === 'Success' || result.status === 'Fail',
-      3000,
-      100
+      (result) => result.status?.toLowerCase() === 'success' || result.status?.toLowerCase() === 'fail',
+      5000,  // 5 seconds between polls (was 3)
+      30     // max 30 polls = 2.5 minutes max (was 100 = 5 minutes)
     );
 
-    if (pollResponse.status === 'Fail') {
+    if (pollResponse.status?.toLowerCase() === 'fail') {
       res.status(500).json(errorResponse('TTS_API_ERROR', pollResponse.status_msg || 'TTS generation failed'));
       return;
     }
 
+    // file_id is the audio file, subtitle_file_id is the subtitle file (per MiniMax API docs)
     if (!pollResponse.file_id) {
       res.status(500).json(errorResponse('TTS_API_ERROR', 'No file_id in response'));
       return;
     }
 
-    // Download audio
+    // Download audio using file_id
+    // Note: MiniMax returns a tar archive containing MP3 and subtitle files when subtitle is requested
     const downloadResponse = await fetch(`https://api.minimaxi.com/v1/files/retrieve_content?file_id=${pollResponse.file_id}`, {
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -315,24 +431,83 @@ articlesRouter.post('/:id/tts', async (req: Request, res: Response) => {
       return;
     }
 
-    // Convert binary to base64
+    // Get the response as buffer
     const arrayBuffer = await downloadResponse.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    const audioBase64 = buffer.toString('base64');
+
+    // Extract MP3 and subtitle from tar archive, or use raw buffer if not a tar
+    let audioBuffer: Buffer;
+    let subtitleText: string | undefined;
+
+    if (isTarBuffer(buffer)) {
+      // Extract from tar archive
+      try {
+        const result = await extractFromTar(buffer);
+        audioBuffer = result.audioBuffer;
+        subtitleText = result.subtitleText;
+      } catch (err) {
+        console.error('Failed to extract from tar:', err);
+        res.status(500).json(errorResponse('TTS_API_ERROR', 'Failed to extract audio from download'));
+        return;
+      }
+    } else {
+      // Assume raw MP3 (MiniMax might return raw MP3 in some cases)
+      console.log('Response is not a tar archive, using raw buffer as MP3');
+      audioBuffer = buffer;
+      // If the response happens to be JSON (error response), it will fail here
+      if (audioBuffer.length < 1000) {
+        // Likely an error message
+        const text = audioBuffer.toString('utf-8');
+        console.error('Unexpected response instead of audio:', text.substring(0, 500));
+        res.status(500).json(errorResponse('TTS_API_ERROR', 'Failed to download audio: unexpected response'));
+        return;
+      }
+    }
+
+    // Convert MP3 binary to base64
+    const audioBase64 = audioBuffer.toString('base64');
+
+    // Parse subtitle text if available (extracted from tar archive as MiniMax JSON format)
+    let sentenceData: string | undefined;
+    if (subtitleText) {
+      try {
+        const sentences = parseMiniMaxTitles(subtitleText);
+        sentenceData = sentenceTimingsToJSON(sentences);
+        console.log(`Parsed ${sentences.length} sentences from subtitle`);
+      } catch (err) {
+        console.error('Failed to parse subtitle:', err);
+        // Continue without subtitles - audio is still valid
+      }
+    }
 
     // Save to TTS table (upsert)
     await prisma.tTS.upsert({
       where: { articleId: id },
       update: {
         audioData: audioBase64,
+        ...(sentenceData && { sentenceData }),
       },
       create: {
         articleId: id,
         audioData: audioBase64,
+        ...(sentenceData && { sentenceData }),
       },
     });
 
-    res.json(successResponse({ audioData: audioBase64 }));
+    // Return sentence timings in response
+    let sentences = [];
+    if (sentenceData) {
+      try {
+        sentences = JSON.parse(sentenceData);
+      } catch {
+        sentences = [];
+      }
+    }
+
+    res.json(successResponse({
+      audioData: audioBase64,
+      sentences,
+    }));
     return;
   } catch (error) {
     console.error('Error generating TTS:', error);
@@ -341,7 +516,7 @@ articlesRouter.post('/:id/tts', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/articles/:id/tts - Get TTS audio for an article
+// GET /api/articles/:id/tts - Get TTS audio and sentence timings for an article
 articlesRouter.get('/:id/tts', async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
@@ -355,7 +530,20 @@ articlesRouter.get('/:id/tts', async (req: Request, res: Response) => {
       return;
     }
 
-    res.json(successResponse({ audioData: tts.audioData }));
+    // Parse sentence timings if available
+    let sentences = [];
+    if (tts.sentenceData) {
+      try {
+        sentences = JSON.parse(tts.sentenceData);
+      } catch {
+        sentences = [];
+      }
+    }
+
+    res.json(successResponse({
+      audioData: tts.audioData,
+      sentences,
+    }));
     return;
   } catch (error) {
     console.error('Error getting TTS:', error);

@@ -64,5 +64,17 @@ CREATE TABLE "models" (
     "apiKey" TEXT NOT NULL
 );
 
+-- CreateTable
+CREATE TABLE "tts" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "articleId" TEXT NOT NULL,
+    "audioData" TEXT NOT NULL,
+    "sentenceData" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "models_name_key" ON "models"("name");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "tts_articleId_key" ON "tts"("articleId");

@@ -74,18 +74,35 @@ export interface Word {
   createdAt?: string;
 }
 
+export type ExerciseType = 'choice' | 'fill_blank' | 'open_ended' | 'translation' | 'word_explanation' | 'sentence_imitation';
+
+export interface ExerciseRubric {
+  bands: Record<string, { min: number; max: number; description: string }>;
+  criteria: string[];
+}
+
 export interface Exercise {
   id: number;
   articleId: string;
-  type: 'choice' | 'fill_blank';
-  questionContent: string;
+  type: ExerciseType;
+  questionContent: string | {
+    direction?: 'to_native' | 'to_target';
+    text?: string;
+    example?: string;
+    instruction?: string;
+  };
   options: string[] | null;
   correctAnswers: string[] | null;
+  rubric: ExerciseRubric | null;
+  sampleAnswer: string | null;
+  partialScoring: { totalBlanks: number } | null;
   explanation: string | null;
   status: 'pending' | 'submitted' | 'graded';
   score: number | null;
+  bandScore: number | null;
   comments: string | null;
   createdAt?: string;
+  sessionId: string | null;
   article?: Article;
 }
 
@@ -125,6 +142,14 @@ export interface TTSVoice {
 
 export interface TTSResult {
   audioData: string;
+  sentences: SentenceTiming[];
+}
+
+// Sentence timing data for TTS word highlighting
+export interface SentenceTiming {
+  text: string;
+  start: number;
+  end: number;
 }
 
 // API Functions
@@ -178,18 +203,27 @@ export async function generateExercise(articleId: string): Promise<Exercise[]> {
   });
 }
 
+export interface GradingResult {
+  totalScore: number;
+  bandScore: number;
+  overallComment: string;
+  strengths: string[];
+  areasForImprovement: string[];
+}
+
 export async function submitExercise(
   exerciseId: number,
-  answers: string[]
-): Promise<{ exercises: Exercise[]; grading: any }> {
+  answers: string[],
+  sessionId?: string
+): Promise<{ exercises: Exercise[]; grading: GradingResult }> {
   // Convert answers array to the format expected by backend: [{ questionIndex, answer }]
   const formattedAnswers = answers.map((answer, index) => ({
     questionIndex: index,
     answer,
   }));
-  return fetchApi<{ exercises: Exercise[]; grading: any }>(`/exercises/${exerciseId}/submit`, {
+  return fetchApi<{ exercises: Exercise[]; grading: GradingResult }>(`/exercises/${exerciseId}/submit`, {
     method: 'POST',
-    body: JSON.stringify({ answers: formattedAnswers }),
+    body: JSON.stringify({ answers: formattedAnswers, sessionId }),
   });
 }
 
@@ -270,7 +304,12 @@ export async function generateTTS(articleId: string): Promise<TTSResult> {
 
 export async function getTTS(articleId: string): Promise<TTSResult | null> {
   try {
-    return await fetchApi<TTSResult>(`/articles/${articleId}/tts`);
+    const response = await fetch(`/api/articles/${articleId}/tts`);
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      return null;  // TTS not found or error
+    }
+    return data.data;
   } catch {
     return null;
   }
@@ -296,6 +335,25 @@ export async function deleteExercise(exerciseId: number): Promise<void> {
 
 export async function deleteAllExercises(articleId: string): Promise<{ deleted: number }> {
   return fetchApi<{ deleted: number }>(`/exercises/article/${articleId}`, {
+    method: 'DELETE',
+  });
+}
+
+// TTS Entry type (returned from GET /api/tts)
+export interface TTSEntry {
+  id: string;
+  articleId: string;
+  audioData: string;
+  sentenceData: SentenceTiming[] | null;
+  createdAt: string;
+}
+
+export async function getAllTTS(): Promise<TTSEntry[]> {
+  return fetchApi<TTSEntry[]>('/tts');
+}
+
+export async function deleteTTS(id: string): Promise<void> {
+  await fetchApi<void>(`/tts/${id}`, {
     method: 'DELETE',
   });
 }

@@ -5,6 +5,7 @@ import { ArticleDetailPage } from './pages/ArticleDetailPage'
 import { WordListPage } from './pages/WordListPage'
 import { ExercisesPage } from './pages/ExercisesPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { TTSPage } from './pages/TTSPage'
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
           <Route path="/articles/:id" element={<ArticleDetailPage />} />
           <Route path="/word-list" element={<WordListPage />} />
           <Route path="/exercises" element={<ExercisesPage />} />
+          <Route path="/tts" element={<TTSPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
