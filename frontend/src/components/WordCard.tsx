@@ -169,6 +169,16 @@ export function WordCard({
         className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[500px] max-w-[90vw] bg-white/95 dark:bg-gray-800/95 backdrop-blur-md rounded-xl border border-gray-200 dark:border-gray-700 shadow-2xl z-50"
         style={{ cursor: 'wait' }}
       >
+        {/* Header with close button */}
+        <div className="flex items-center justify-end p-3 border-b border-gray-100 dark:border-gray-700">
+          <button
+            onClick={onClose}
+            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+            title="Close"
+          >
+            <X size={20} />
+          </button>
+        </div>
         <div className="flex flex-col items-center justify-center p-8">
           <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent mb-4"></div>
           <p className="text-gray-500 dark:text-gray-400">Looking up word...</p>

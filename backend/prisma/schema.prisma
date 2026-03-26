@@ -69,6 +69,7 @@ model Exercise {
   score           Int?     // Score as percentage (0-100) or raw points
   bandScore       Int?     // IELTS band score (0-9)
   comments        String?  // Grading feedback
+  analysis        String?  // JSON object with per-question detailed analysis (逐题解析)
   createdAt       DateTime @default(now())
   article         Article? @relation(fields: [articleId], references: [id])
 

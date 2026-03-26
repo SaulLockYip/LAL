@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { prisma, generateExercises, gradeExercises } from '../services/ai.js';
+import { prisma, generateExercises, gradeExercises, GradingResult } from '../services/ai.js';
 
 export const exercisesRouter = Router();
 
@@ -30,7 +30,7 @@ function errorResponse(code: string, message: string) {
 // POST /api/exercises/generate - Generate exercises for article
 exercisesRouter.post('/generate', async (req: Request, res: Response) => {
   try {
-    const { articleId } = req.body;
+    const { articleId, options } = req.body;
 
     if (!articleId) {
       res.status(400).json(errorResponse('VALIDATION_ERROR', 'articleId is required'));
@@ -50,6 +50,9 @@ exercisesRouter.post('/generate', async (req: Request, res: Response) => {
       return;
     }
 
+    // Get user settings for language info
+    const user = await prisma.user.findFirst();
+
     // Get word list as JSON
     const wordListJson = JSON.stringify(
       article.wordLists.map(w => ({
@@ -59,26 +62,55 @@ exercisesRouter.post('/generate', async (req: Request, res: Response) => {
       }))
     );
 
-    // Generate exercises using AI
+    // Generate exercises using AI with proper language settings
     const decodedContent = decodeBase64Content(article.content);
-    const exercises = await generateExercises(decodedContent, wordListJson);
+    const exercises = await generateExercises(decodedContent, wordListJson, {
+      userNativeLanguage: user?.nativeLanguage,
+      userTargetLanguage: user?.targetLanguage,
+      userLevel: user?.currentLevel,
+      countPerType: options?.countPerType,
+    });
 
-    // Store exercises in database
+    // Generate a session ID to group exercises taken together
+    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+    // Store exercises in database with all metadata
     const createdExercises = await Promise.all(
       exercises.map(ex =>
         prisma.exercise.create({
           data: {
             articleId,
             type: ex.type,
-            questionContent: ex.question,
+            questionContent: typeof ex.question === 'object'
+              ? JSON.stringify(ex.question)
+              : ex.question,
             options: ex.options ? JSON.stringify(ex.options) : null,
+            correctAnswers: ex.correctAnswers ? JSON.stringify(ex.correctAnswers) : null,
+            rubric: ex.rubric ? JSON.stringify(ex.rubric) : null,
+            sampleAnswer: ex.sampleAnswer ? JSON.stringify(ex.sampleAnswer) : null,
+            partialScoring: ex.blanks ? JSON.stringify({ totalBlanks: ex.blanks }) : null,
+            explanation: ex.explanation || null,
             status: 'pending',
+            sessionId,
           },
         })
       )
     );
 
-    res.json(successResponse(createdExercises));
+    // Return exercises with parsed JSON fields for frontend
+    const exercisesForClient = createdExercises.map(ex => ({
+      id: ex.id,
+      articleId: ex.articleId,
+      type: ex.type,
+      questionContent: parseQuestionContent(ex.questionContent, ex.type),
+      options: ex.options ? JSON.parse(ex.options) : null,
+      correctAnswers: ex.correctAnswers ? JSON.parse(ex.correctAnswers) : null,
+      explanation: ex.explanation,
+      status: ex.status,
+      sessionId: ex.sessionId,
+    }));
+
+    res.json(successResponse(exercisesForClient));
     return;
   } catch (error) {
     console.error('Error generating exercises:', error);
@@ -88,11 +120,23 @@ exercisesRouter.post('/generate', async (req: Request, res: Response) => {
   }
 });
 
+// Helper function to parse question content based on type
+function parseQuestionContent(content: string, type: string): unknown {
+  try {
+    // Try to parse as JSON first
+    const parsed = JSON.parse(content);
+    return parsed;
+  } catch {
+    // Return as plain string
+    return content;
+  }
+}
+
 // POST /api/exercises/:id/submit - Submit answers and grade
 exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    const { answers } = req.body; // Array of { questionIndex, answer }
+    const { answers, sessionId } = req.body; // Array of { questionIndex, answer }
 
     const parsedId = parseInt(id);
     if (isNaN(parsedId)) {
@@ -115,9 +159,17 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
       return;
     }
 
-    // Get all exercises for this article to build complete question set
+    // Get user settings for language info
+    const user = await prisma.user.findFirst();
+
+    // Get all exercises for this session (or article if no sessionId)
+    // Use sessionId if provided, otherwise use articleId
+    const sessionFilter = sessionId
+      ? { sessionId }
+      : { articleId: exercise.articleId };
+
     const allExercises = await prisma.exercise.findMany({
-      where: { articleId: exercise.articleId },
+      where: sessionFilter,
       orderBy: { id: 'asc' },
     });
 
@@ -132,13 +184,20 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
       return;
     }
 
-    // Build questions JSON
-    const questionsJson = JSON.stringify(
+    // Decode article content BEFORE passing to grading
+    const decodedContent = decodeBase64Content(article.content);
+
+    // Build exercises JSON with full metadata for grading
+    const exercisesJson = JSON.stringify(
       allExercises.map((ex, idx) => ({
-        index: idx,
+        id: ex.id,
         type: ex.type,
-        question: ex.questionContent,
+        question: parseQuestionContent(ex.questionContent, ex.type),
         options: ex.options ? JSON.parse(ex.options) : null,
+        correctAnswers: ex.correctAnswers ? JSON.parse(ex.correctAnswers) : null,
+        blanks: ex.partialScoring ? JSON.parse(ex.partialScoring).totalBlanks : null,
+        sampleAnswer: ex.sampleAnswer ? JSON.parse(ex.sampleAnswer) : null,
+        rubric: ex.rubric ? JSON.parse(ex.rubric) : null,
       }))
     );
 
@@ -154,33 +213,70 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
       }))
     );
 
-    // Grade with AI
+    // Grade with AI (pass decoded content, not base64)
     const gradingResult = await gradeExercises(
-      questionsJson,
+      exercisesJson,
       userAnswersJson,
-      article.content,
-      wordListJson
+      decodedContent,
+      wordListJson,
+      {
+        userNativeLanguage: user?.nativeLanguage,
+        userTargetLanguage: user?.targetLanguage,
+        userLevel: user?.currentLevel,
+      }
     );
+
+    // Create a map of exercise ID to grading result for easy lookup
+    const gradingMap = new Map<number, GradingResult['results'][0]>();
+    for (const result of gradingResult.results) {
+      if (result.exerciseId) {
+        gradingMap.set(result.exerciseId, result);
+      }
+    }
 
     // Update all exercises with their individual grading results
     const updatedExercises = await Promise.all(
-      allExercises.map((ex, index) => {
-        const result = gradingResult.results[index];
+      allExercises.map((ex) => {
+        const result = gradingMap.get(ex.id);
         return prisma.exercise.update({
           where: { id: ex.id },
           data: {
             status: 'graded',
-            correctAnswers: JSON.stringify(result ? [result] : []),
-            score: result?.score ?? 0,
-            comments: gradingResult.overallComment,
+            score: result?.score ?? null,
+            bandScore: result?.bandScore ?? null,
+            comments: result?.comment ?? gradingResult.overallComment,
+            analysis: result?.analysis ? JSON.stringify(result.analysis) : null,
           },
         });
       })
     );
 
+    // Return updated exercises with parsed fields and grading summary
+    const exercisesForClient = updatedExercises.map(ex => ({
+      id: ex.id,
+      articleId: ex.articleId,
+      type: ex.type,
+      questionContent: parseQuestionContent(ex.questionContent, ex.type),
+      options: ex.options ? JSON.parse(ex.options) : null,
+      correctAnswers: ex.correctAnswers ? JSON.parse(ex.correctAnswers) : null,
+      explanation: ex.explanation,
+      status: ex.status,
+      score: ex.score,
+      bandScore: ex.bandScore,
+      comments: ex.comments,
+      analysis: ex.analysis ? JSON.parse(ex.analysis) : null,
+      sessionId: ex.sessionId,
+    }));
+
     res.json(successResponse({
-      exercises: updatedExercises,
-      grading: gradingResult,
+      exercises: exercisesForClient,
+      grading: {
+        totalScore: gradingResult.totalScore,
+        bandScore: gradingResult.bandScore,
+        overallComment: gradingResult.overallComment,
+        strengths: gradingResult.strengths,
+        areasForImprovement: gradingResult.areasForImprovement,
+      },
     }));
     return;
   } catch (error) {
@@ -194,7 +290,7 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
 // GET /api/exercises?articleId=xxx - List exercises
 exercisesRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const { articleId, status, sortBy = 'id', sortOrder = 'asc' } = req.query;
+    const { articleId, status, sessionId, sortBy = 'id', sortOrder = 'asc' } = req.query;
 
     const where: Record<string, unknown> = {};
 
@@ -204,6 +300,10 @@ exercisesRouter.get('/', async (req: Request, res: Response) => {
 
     if (status && typeof status === 'string') {
       where.status = status;
+    }
+
+    if (sessionId && typeof sessionId === 'string') {
+      where.sessionId = sessionId;
     }
 
     const orderBy: Record<string, string> = {};
@@ -228,11 +328,26 @@ exercisesRouter.get('/', async (req: Request, res: Response) => {
       },
     });
 
-    // Parse JSON fields
+    // Parse JSON fields and format for client
     const exercisesForClient = exercises.map(ex => ({
-      ...ex,
+      id: ex.id,
+      articleId: ex.articleId,
+      type: ex.type,
+      questionContent: parseQuestionContent(ex.questionContent, ex.type),
       options: ex.options ? JSON.parse(ex.options) : null,
       correctAnswers: ex.correctAnswers ? JSON.parse(ex.correctAnswers) : null,
+      rubric: ex.rubric ? JSON.parse(ex.rubric) : null,
+      sampleAnswer: ex.sampleAnswer ? JSON.parse(ex.sampleAnswer) : null,
+      partialScoring: ex.partialScoring ? JSON.parse(ex.partialScoring) : null,
+      explanation: ex.explanation,
+      status: ex.status,
+      score: ex.score,
+      bandScore: ex.bandScore,
+      comments: ex.comments,
+      analysis: ex.analysis ? JSON.parse(ex.analysis) : null,
+      sessionId: ex.sessionId,
+      createdAt: ex.createdAt,
+      article: ex.article,
     }));
 
     res.json(successResponse(exercisesForClient));
@@ -273,9 +388,24 @@ exercisesRouter.get('/:id', async (req: Request, res: Response) => {
     }
 
     res.json(successResponse({
-      ...exercise,
+      id: exercise.id,
+      articleId: exercise.articleId,
+      type: exercise.type,
+      questionContent: parseQuestionContent(exercise.questionContent, exercise.type),
       options: exercise.options ? JSON.parse(exercise.options) : null,
       correctAnswers: exercise.correctAnswers ? JSON.parse(exercise.correctAnswers) : null,
+      rubric: exercise.rubric ? JSON.parse(exercise.rubric) : null,
+      sampleAnswer: exercise.sampleAnswer ? JSON.parse(exercise.sampleAnswer) : null,
+      partialScoring: exercise.partialScoring ? JSON.parse(exercise.partialScoring) : null,
+      explanation: exercise.explanation,
+      status: exercise.status,
+      score: exercise.score,
+      bandScore: exercise.bandScore,
+      comments: exercise.comments,
+      analysis: exercise.analysis ? JSON.parse(exercise.analysis) : null,
+      sessionId: exercise.sessionId,
+      createdAt: exercise.createdAt,
+      article: exercise.article,
     }));
     return;
   } catch (error) {
@@ -323,7 +453,7 @@ exercisesRouter.delete('/:id', async (req: Request, res: Response) => {
 // DELETE /api/exercises/article/:articleId - Delete all exercises for an article
 exercisesRouter.delete('/article/:articleId', async (req: Request, res: Response) => {
   try {
-    const { articleId } = req.params;
+    const articleId = req.params.articleId as string;
 
     if (!articleId) {
       res.status(400).json(errorResponse('VALIDATION_ERROR', 'articleId is required'));
