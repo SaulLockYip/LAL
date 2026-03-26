@@ -317,16 +317,92 @@ def _cleanup_processes() -> None:
 
 
 @click.command("init")
-def init() -> None:
+@click.option("--repo", default="https://github.com/SaulLockYip/LAL.git", help="Git repository to clone")
+@click.option("--dir", "target_dir", default=None, help="Target directory (default: ~/LAL)")
+@click.option("--skip-clone", is_flag=True, help="Skip git clone (use existing directory)")
+def init(repo: str, target_dir: str | None, skip_clone: bool) -> None:
     """Initialize the LAL project.
 
-    Creates the database directory and file, checks for frontend/backend
-    directories, and creates a default .env file in the backend.
+    Clones the repository to ~/LAL (or specified directory), installs dependencies,
+    builds the frontend, and sets up the database.
     """
     click.echo("Initializing LAL project...")
 
-    # Create database directory and initialize database
-    click.echo("\n[1/4] Setting up database...")
+    # Determine target directory
+    if target_dir:
+        install_dir = Path(target_dir).expanduser().resolve()
+    else:
+        install_dir = Path.home() / "LAL"
+
+    # Step 1: Clone repo if needed
+    click.echo("\n[1/6] Setting up project directory...")
+    if install_dir.exists() and any(install_dir.iterdir()) and not skip_clone:
+        click.echo(f"  Directory already exists: {install_dir}")
+        click.echo("  Use --skip-clone to use existing directory")
+    elif not install_dir.exists():
+        click.echo(f"  Cloning repository to: {install_dir}")
+        try:
+            subprocess.run(["git", "clone", repo, str(install_dir)], check=True, capture_output=True)
+            click.echo("  Repository cloned successfully")
+        except subprocess.CalledProcessError as e:
+            click.echo(f"  Error cloning repository: {e.stderr.decode() if e.stderr else str(e)}", err=True)
+            return
+        except FileNotFoundError:
+            click.echo("  Error: git is not installed. Please install git first.", err=True)
+            return
+    else:
+        click.echo(f"  Empty directory, skipping clone: {install_dir}")
+
+    # Update PROJECT_ROOT, BACKEND_DIR, FRONTEND_DIR to use install_dir
+    global PROJECT_ROOT, BACKEND_DIR, FRONTEND_DIR
+    PROJECT_ROOT = install_dir
+    BACKEND_DIR = install_dir / "backend"
+    FRONTEND_DIR = install_dir / "frontend"
+
+    # Step 2: Install backend dependencies
+    click.echo("\n[2/6] Installing backend dependencies...")
+    if BACKEND_DIR.exists():
+        try:
+            subprocess.run(["npm", "install"], cwd=str(BACKEND_DIR), check=True, capture_output=True)
+            click.echo("  Backend dependencies installed")
+        except subprocess.CalledProcessError as e:
+            click.echo(f"  Error installing backend dependencies: {e.stderr.decode() if e.stderr else str(e)}", err=True)
+            return
+        except FileNotFoundError:
+            click.echo("  Error: npm is not installed. Please install Node.js first.", err=True)
+            return
+    else:
+        click.echo("  Backend directory not found", err=True)
+        return
+
+    # Step 3: Install frontend dependencies
+    click.echo("\n[3/6] Installing frontend dependencies...")
+    if FRONTEND_DIR.exists():
+        try:
+            subprocess.run(["npm", "install"], cwd=str(FRONTEND_DIR), check=True, capture_output=True)
+            click.echo("  Frontend dependencies installed")
+        except subprocess.CalledProcessError as e:
+            click.echo(f"  Error installing frontend dependencies: {e.stderr.decode() if e.stderr else str(e)}", err=True)
+            return
+    else:
+        click.echo("  Frontend directory not found", err=True)
+        return
+
+    # Step 4: Build frontend static files
+    click.echo("\n[4/6] Building frontend...")
+    if FRONTEND_DIR.exists():
+        try:
+            subprocess.run(["npm", "run", "build"], cwd=str(FRONTEND_DIR), check=True, capture_output=True)
+            click.echo("  Frontend built successfully")
+        except subprocess.CalledProcessError as e:
+            click.echo(f"  Error building frontend: {e.stderr.decode() if e.stderr else str(e)}", err=True)
+            return
+    else:
+        click.echo("  Frontend directory not found", err=True)
+        return
+
+    # Step 5: Create database and .env
+    click.echo("\n[5/6] Setting up database...")
     db_dir = DB_PATH.parent
     db_dir.mkdir(parents=True, exist_ok=True)
     init_db()
@@ -334,22 +410,8 @@ def init() -> None:
     click.echo(f"  Database file: {DB_PATH}")
     click.echo("  Database tables created successfully.")
 
-    # Check backend directory
-    click.echo("\n[2/4] Checking backend directory...")
-    if BACKEND_DIR.exists():
-        click.echo(f"  Backend found at: {BACKEND_DIR}")
-    else:
-        click.echo(f"  Backend directory not found at: {BACKEND_DIR}", err=True)
-
-    # Check frontend directory
-    click.echo("\n[3/4] Checking frontend directory...")
-    if FRONTEND_DIR.exists():
-        click.echo(f"  Frontend found at: {FRONTEND_DIR}")
-    else:
-        click.echo(f"  Frontend directory not found at: {FRONTEND_DIR}", err=True)
-
-    # Create .env file in backend if it doesn't exist
-    click.echo("\n[4/4] Setting up backend environment...")
+    # Step 6: Create .env file in backend if it doesn't exist
+    click.echo("\n[6/6] Setting up backend environment...")
     env_file = BACKEND_DIR / ".env"
     if env_file.exists():
         click.echo(f"  .env file already exists at: {env_file}")
@@ -366,65 +428,63 @@ PORT={BACKEND_PORT}
         except Exception as e:
             click.echo(f"  Warning: Could not create .env file: {e}", err=True)
 
-    click.echo("\nInitialization complete!")
+    click.echo("\n" + "="*50)
+    click.echo("Initialization complete!")
+    click.echo(f"  Project location: {install_dir}")
+    click.echo(f"  Database: {DB_PATH}")
     click.echo("\nNext steps:")
-    click.echo("  1. Run 'lal-cli start' to start the servers")
-    click.echo("  2. Configure your AI model with 'lal-cli models addanthropic --model-name <name> --key <key>'")
+    click.echo("  1. Run 'lal-cli start' to start the server")
+    click.echo("  2. Configure your AI model with 'lal-cli models add-anthropic --model-name <name> --key <key>'")
     click.echo("  3. Set up your profile with 'lal-cli user config --name <name> --native <lang> --target <lang>'")
+    click.echo(f"  4. Open http://localhost:{BACKEND_PORT} in your browser")
 
 
 @click.command("start")
 def start() -> None:
-    """Start both frontend and backend servers.
+    """Start the LAL server.
 
-    Starts the backend server on port 18080 and frontend on port 5173.
-    Servers run in the background and will continue until 'stop' is called
+    Starts the backend server which serves both the API and frontend static files.
+    Server runs in the background and will continue until 'stop' is called
     or the process is interrupted.
     """
     global _running_processes
 
-    # Check if servers are already running
-    backend_running = _is_port_in_use(BACKEND_PORT)
-    frontend_running = _is_port_in_use(FRONTEND_PORT)
-
-    if backend_running:
-        click.echo(f"Error: Backend server is already running on port {BACKEND_PORT}.", err=True)
+    # Check if server is already running
+    if _is_port_in_use(BACKEND_PORT):
+        click.echo(f"Error: Server is already running on port {BACKEND_PORT}.", err=True)
         click.echo("Use 'lal-cli stop' to stop it first, or 'lal-cli restart' to restart.", err=True)
         return
 
-    if frontend_running:
-        click.echo(f"Error: Frontend server is already running on port {FRONTEND_PORT}.", err=True)
-        click.echo("Use 'lal-cli stop' to stop it first, or 'lal-cli restart' to restart.", err=True)
-        return
-
-    # Check that backend and frontend directories exist
+    # Check that backend directory exists
     if not BACKEND_DIR.exists():
         click.echo(f"Error: Backend directory not found at: {BACKEND_DIR}", err=True)
         click.echo("Run 'lal-cli init' first to initialize the project.", err=True)
         return
 
-    if not FRONTEND_DIR.exists():
-        click.echo(f"Error: Frontend directory not found at: {FRONTEND_DIR}", err=True)
-        click.echo("Run 'lal-cli init' first to initialize the project.", err=True)
-        return
+    # Check if frontend dist exists (from build step)
+    dist_path = FRONTEND_DIR / "dist"
+    if not dist_path.exists():
+        click.echo(f"Warning: Frontend has not been built (dist folder not found).", err=True)
+        click.echo(f"Run 'npm run build' in {FRONTEND_DIR} first, or run 'lal-cli init' to set up.", err=True)
+        click.echo("Starting server anyway - API will work but frontend will not be available.", err=True)
 
-    click.echo("Starting servers...")
+    click.echo("Starting server...")
 
     # Set up signal handlers for graceful shutdown
     def signal_handler(sig, frame):
-        click.echo("\nShutting down servers...")
+        click.echo("\nShutting down server...")
         _cleanup_processes()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Start backend server
-    click.echo(f"\nStarting backend server on port {BACKEND_PORT}...")
+    # Start backend server (serves both API and frontend static files)
+    click.echo(f"\nStarting server on port {BACKEND_PORT}...")
     try:
         backend_env = os.environ.copy()
         backend_proc = subprocess.Popen(
-            ["npm", "run", "dev"],
+            ["npm", "start"],
             cwd=str(BACKEND_DIR),
             env=backend_env,
             stdout=subprocess.PIPE,
@@ -432,125 +492,193 @@ def start() -> None:
             preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
         )
         _running_processes.append(backend_proc)
-        click.echo(f"  Backend starting (PID: {backend_proc.pid})...")
+        click.echo(f"  Server starting (PID: {backend_proc.pid})...")
     except Exception as e:
-        click.echo(f"  Error starting backend: {e}", err=True)
+        click.echo(f"  Error starting server: {e}", err=True)
         _cleanup_processes()
         return
 
-    # Wait a moment for backend to start
-    time.sleep(2)
+    # Wait for server to start
+    time.sleep(3)
 
-    # Start frontend server
-    click.echo(f"Starting frontend server on port {FRONTEND_PORT}...")
-    try:
-        frontend_env = os.environ.copy()
-        frontend_proc = subprocess.Popen(
-            ["npm", "run", "dev"],
-            cwd=str(FRONTEND_DIR),
-            env=frontend_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
-        )
-        _running_processes.append(frontend_proc)
-        click.echo(f"  Frontend starting (PID: {frontend_proc.pid})...")
-    except Exception as e:
-        click.echo(f"  Error starting frontend: {e}", err=True)
-        _cleanup_processes()
-        return
+    click.echo("\n" + "="*50)
+    click.echo(f"LAL server is running!")
+    click.echo(f"  Frontend: http://localhost:{BACKEND_PORT}")
+    click.echo(f"  API:      http://localhost:{BACKEND_PORT}/api")
+    click.echo("\nPress Ctrl+C to stop the server.")
 
-    # Wait for servers to be ready
-    click.echo("\nWaiting for servers to be ready...")
-    max_wait = 30
-    for i in range(max_wait):
-        time.sleep(1)
-        if _is_port_in_use(BACKEND_PORT) and _is_port_in_use(FRONTEND_PORT):
+    # Keep running and stream logs
+    while True:
+        try:
+            line = backend_proc.stdout.readline()
+            if line:
+                click.echo(line.decode(), nl=False)
+            if backend_proc.poll() is not None:
+                break
+        except:
             break
-        if i % 5 == 0:
-            click.echo(f"  Still starting... ({i+1}/{max_wait}s)")
-
-    # Check if servers started successfully
-    if not _is_port_in_use(BACKEND_PORT):
-        click.echo("Warning: Backend server may not have started correctly.", err=True)
-    if not _is_port_in_use(FRONTEND_PORT):
-        click.echo("Warning: Frontend server may not have started correctly.", err=True)
-
-    click.echo("\n" + "=" * 50)
-    click.echo("Servers started successfully!")
-    click.echo(f"  Backend:  http://localhost:{BACKEND_PORT}")
-    click.echo(f"  Frontend: http://localhost:{FRONTEND_PORT}")
-    click.echo("=" * 50)
-    click.echo("\nPress Ctrl+C to stop the servers.")
-
-    # Keep the process running
-    try:
-        while True:
-            time.sleep(1)
-            # Check if any process has died
-            for proc in _running_processes:
-                if proc.poll() is not None:
-                    click.echo("\nError: A server process has exited unexpectedly.", err=True)
-                    _cleanup_processes()
-                    return
-    except KeyboardInterrupt:
-        pass
-    finally:
-        _cleanup_processes()
 
 
 @click.command("stop")
 def stop() -> None:
-    """Stop all running LAL servers.
+    """Stop the running LAL server.
 
-    Kills processes running on ports 18080 (backend) and 5173 (frontend).
+    Kills the process running on port 18080.
     """
-    click.echo("Stopping servers...")
+    click.echo("Stopping server...")
 
     backend_stopped = _kill_process_on_port(BACKEND_PORT)
-    frontend_stopped = _kill_process_on_port(FRONTEND_PORT)
 
     # Also clean up any processes we started
     _cleanup_processes()
 
-    if not backend_stopped and not frontend_stopped:
-        click.echo("No servers were running on the expected ports.")
-        click.echo(f"  Backend:  port {BACKEND_PORT}")
-        click.echo(f"  Frontend: port {FRONTEND_PORT}")
+    if not backend_stopped:
+        click.echo("No server was running on port {BACKEND_PORT}.")
         return
 
-    if backend_stopped:
-        click.echo(f"  Backend server on port {BACKEND_PORT} stopped.")
-    else:
-        click.echo(f"  No backend server found on port {BACKEND_PORT}.")
-
-    if frontend_stopped:
-        click.echo(f"  Frontend server on port {FRONTEND_PORT} stopped.")
-    else:
-        click.echo(f"  No frontend server found on port {FRONTEND_PORT}.")
-
-    click.echo("Servers stopped.")
+    click.echo(f"  Server on port {BACKEND_PORT} stopped.")
+    click.echo("Server stopped.")
 
 
 @click.command("restart")
 def restart() -> None:
-    """Restart all LAL servers.
+    """Restart the LAL server.
 
-    Stops any running servers and then starts them again.
+    Stops any running server and then starts it again.
     """
-    click.echo("Restarting servers...")
+    global _running_processes
 
-    # Try to stop any running servers first
-    backend_was_running = _is_port_in_use(BACKEND_PORT)
-    frontend_was_running = _is_port_in_use(FRONTEND_PORT)
-
-    if backend_was_running or frontend_was_running:
-        stop()
+    # Stop any running server
+    if _is_port_in_use(BACKEND_PORT):
+        click.echo("Stopping server...")
+        _kill_process_on_port(BACKEND_PORT)
+        _cleanup_processes()
         time.sleep(1)
+    else:
+        click.echo("No server was running.")
 
-    # Start servers
-    click.echo("\nStarting servers...")
-    start()
+    # Check that backend directory exists
+    if not BACKEND_DIR.exists():
+        click.echo(f"Error: Backend directory not found at: {BACKEND_DIR}", err=True)
+        return
+
+    # Start server
+    click.echo("Starting server...")
+    try:
+        backend_env = os.environ.copy()
+        backend_proc = subprocess.Popen(
+            ["npm", "start"],
+            cwd=str(BACKEND_DIR),
+            env=backend_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
+        )
+        _running_processes.append(backend_proc)
+        click.echo(f"  Server starting (PID: {backend_proc.pid})...")
+    except Exception as e:
+        click.echo(f"  Error starting server: {e}", err=True)
+        return
+
+    time.sleep(3)
+
+    click.echo(f"\nServer restarted on port {BACKEND_PORT}.")
+    click.echo(f"  Frontend: http://localhost:{BACKEND_PORT}")
+    click.echo(f"  API:      http://localhost:{BACKEND_PORT}/api")
+
+
+@click.command("update")
+def update() -> None:
+    """Update LAL to the latest version.
+
+    Pulls latest code from git, reinstalls dependencies, rebuilds frontend,
+    and restarts the server.
+    """
+    # Stop server if running
+    if _is_port_in_use(BACKEND_PORT):
+        click.echo("Stopping server...")
+        _kill_process_on_port(BACKEND_PORT)
+        _cleanup_processes()
+        time.sleep(1)
+    else:
+        click.echo("No server running, proceeding with update...")
+
+    # Check that project directory exists
+    if not PROJECT_ROOT.exists():
+        click.echo(f"Error: Project directory not found at: {PROJECT_ROOT}", err=True)
+        click.echo("Run 'lal-cli init' first to set up the project.", err=True)
+        return
+
+    click.echo("\nUpdating LAL...")
+
+    # Step 1: Git pull
+    click.echo("\n[1/4] Pulling latest code...")
+    try:
+        result = subprocess.run(
+            ["git", "pull", "origin", "main"],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            click.echo(f"  Warning: git pull failed: {result.stderr}")
+        else:
+            click.echo(f"  {result.stdout.strip()}")
+    except FileNotFoundError:
+        click.echo("  Warning: git not found", err=True)
+
+    # Step 2: npm install (backend)
+    click.echo("\n[2/4] Updating backend dependencies...")
+    if BACKEND_DIR.exists():
+        try:
+            subprocess.run(["npm", "install"], cwd=str(BACKEND_DIR), check=True, capture_output=True)
+            click.echo("  Backend dependencies updated")
+        except subprocess.CalledProcessError as e:
+            click.echo(f"  Warning: npm install failed: {e}", err=True)
+    else:
+        click.echo("  Backend directory not found", err=True)
+
+    # Step 3: npm install + build (frontend)
+    click.echo("\n[3/4] Updating frontend dependencies...")
+    if FRONTEND_DIR.exists():
+        try:
+            subprocess.run(["npm", "install"], cwd=str(FRONTEND_DIR), check=True, capture_output=True)
+            click.echo("  Frontend dependencies updated")
+        except subprocess.CalledProcessError as e:
+            click.echo(f"  Warning: npm install failed: {e}", err=True)
+
+        click.echo("\n[4/4] Rebuilding frontend...")
+        try:
+            subprocess.run(["npm", "run", "build"], cwd=str(FRONTEND_DIR), check=True, capture_output=True)
+            click.echo("  Frontend rebuilt")
+        except subprocess.CalledProcessError as e:
+            click.echo(f"  Warning: npm build failed: {e}", err=True)
+    else:
+        click.echo("  Frontend directory not found", err=True)
+
+    # Step 5: Restart server
+    click.echo("\nStarting server...")
+    try:
+        backend_env = os.environ.copy()
+        backend_proc = subprocess.Popen(
+            ["npm", "start"],
+            cwd=str(BACKEND_DIR),
+            env=backend_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
+        )
+        _running_processes.append(backend_proc)
+    except Exception as e:
+        click.echo(f"  Error starting server: {e}", err=True)
+        return
+
+    time.sleep(3)
+
+    click.echo("\n" + "="*50)
+    click.echo("Update complete!")
+    click.echo(f"  Frontend: http://localhost:{BACKEND_PORT}")
+    click.echo(f"  API:      http://localhost:{BACKEND_PORT}/api")
 
 
 # Register subcommands
@@ -561,6 +689,7 @@ cli.add_command(init)
 cli.add_command(start)
 cli.add_command(stop)
 cli.add_command(restart)
+cli.add_command(update)
 
 
 if __name__ == "__main__":

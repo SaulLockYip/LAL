@@ -17,35 +17,37 @@ The `lal-cli` tool provides commands for managing:
 
 #### `lal-cli init`
 
-Initialize the LAL project. Sets up the database, checks directories, and creates environment configuration.
+Initialize the LAL project. Clones the repository, installs dependencies, builds the frontend, and sets up the database.
 
 ```bash
 lal-cli init
 ```
 
 **What it does:**
-1. Creates database directory at `~/.learn-any-language/`
-2. Initializes SQLite database with all tables
-3. Verifies frontend and backend directories exist
-4. Creates `backend/.env` with default configuration
+1. Clones repository to `~/LAL` (or specified directory)
+2. Installs npm dependencies for backend and frontend
+3. Builds frontend static files
+4. Creates database directory at `~/.learn-any-language/`
+5. Initializes SQLite database with all tables
+6. Creates `backend/.env` with default configuration
+
+**Options:**
+- `--repo <url>` - Git repository URL (default: https://github.com/SaulLockYip/LAL.git)
+- `--dir <path>` - Target directory (default: ~/LAL)
+- `--skip-clone` - Skip cloning, use existing directory
 
 **Output:**
 ```
 Initializing LAL project...
 
-[1/4] Setting up database...
-  Database directory: ~/.learn-any-language
-  Database file: ~/.learn-any-language/database.sqlite
-  Database tables created successfully.
+[1/6] Setting up project directory...
+  Cloning repository to: ~/LAL
 
-[2/4] Checking backend directory...
-  Backend found at: /path/to/backend
-
-[3/4] Checking frontend directory...
-  Frontend found at: /path/to/frontend
-
-[4/4] Setting up backend environment...
-  Created .env file at: /path/to/backend/.env
+[2/6] Installing backend dependencies...
+[3/6] Installing frontend dependencies...
+[4/6] Building frontend...
+[5/6] Setting up database...
+[6/6] Setting up backend environment...
 
 Initialization complete!
 ```
@@ -54,13 +56,13 @@ Initialization complete!
 
 #### `lal-cli start`
 
-Start both frontend and backend servers.
+Start the LAL server (serves both frontend static files and API).
 
 ```bash
 lal-cli start
 ```
 
-**Servers:**
+**Server:**
 - Backend API: http://localhost:18080
 - Frontend: http://localhost:5173
 
@@ -91,11 +93,29 @@ lal-cli stop
 
 #### `lal-cli restart`
 
-Restart all servers (stop + start).
+Restart the server (stop + start).
 
 ```bash
 lal-cli restart
 ```
+
+---
+
+#### `lal-cli update`
+
+Update LAL to the latest version from git, then reinstall dependencies and rebuild.
+
+```bash
+lal-cli update
+```
+
+**What it does:**
+1. Stops the server if running
+2. Pulls latest code from git
+3. Reinstalls backend dependencies
+4. Reinstalls frontend dependencies
+5. Rebuilds frontend static files
+6. Restarts the server
 
 ---
 
@@ -264,7 +284,7 @@ lal-cli articles add \
 ```
 
 **Notes:**
-- Article content is base64 encoded for storage
+- Pass article content as plain text - the CLI handles base64 encoding automatically
 - A UUID is generated for each article
 
 ---
@@ -314,16 +334,19 @@ lal-cli articles delete abc123...
 ### First-Time Setup
 
 ```bash
-# 1. Initialize the project
+# 1. Install CLI via uv
+uv tool install git+https://github.com/SaulLockYip/LAL.git
+
+# 2. Initialize the project (clones repo, installs deps, builds)
 lal-cli init
 
-# 2. Configure your AI model
+# 3. Configure your AI model
 lal-cli models add anthropic --model-name "claude-3-5-sonnet" --key "your-key"
 
-# 3. Set up your profile
+# 4. Set up your profile
 lal-cli user config --name "Your Name" --native "English" --target "German" --current-level "A2"
 
-# 4. Start the servers
+# 5. Start the server (serves both frontend and API)
 lal-cli start
 ```
 

@@ -82,7 +82,12 @@ LAL_V0.1.0/
    npm install
    ```
 
-3. **Install CLI dependencies:**
+3. **Install CLI via uv (recommended):**
+   ```bash
+   uv tool install git+https://github.com/SaulLockYip/LAL.git
+   ```
+
+   Or via pip:
    ```bash
    cd cli
    pip install -e .
@@ -99,15 +104,15 @@ This will:
 - Create the backend `.env` file with default configuration
 - Verify frontend and backend directories exist
 
-### Start the Servers
+### Start the Server
 
 ```bash
 lal-cli start
 ```
 
-Servers will start on:
-- Backend API: http://localhost:18080
-- Frontend: http://localhost:5173
+The server starts on **http://localhost:18080** and serves:
+- Frontend (static files)
+- Backend API at `/api/*`
 
 ### Configure AI Model
 
@@ -131,10 +136,11 @@ lal-cli user config --name "Your Name" --native "English" --target "German" --cu
 
 | Command | Description |
 |---------|-------------|
-| `lal-cli init` | Initialize project, database, and environment |
-| `lal-cli start` | Start both frontend and backend servers |
-| `lal-cli stop` | Stop all running servers |
-| `lal-cli restart` | Restart all servers |
+| `lal-cli init` | Clone repo, install deps, build frontend, setup database |
+| `lal-cli start` | Start the server (serves frontend + API) |
+| `lal-cli stop` | Stop the server |
+| `lal-cli restart` | Restart the server |
+| `lal-cli update` | Update to latest version (git pull + reinstall + rebuild) |
 
 ### AI Model Management
 
@@ -238,7 +244,7 @@ Session storage: `~/.learn-any-language/sessions/{article_id}/conversation.json`
 |-------|------|-------------|
 | id | TEXT (UUID) | Primary key |
 | title | TEXT | Article title |
-| content | TEXT | Base64 encoded content |
+| content | TEXT | Article content (CLI auto-encodes to base64) |
 | source | TEXT | Source URL |
 | level | TEXT | CEFR level |
 | archived | BOOLEAN | Archive status |
