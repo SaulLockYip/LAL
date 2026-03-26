@@ -1323,33 +1323,38 @@ export function ArticleDetailPage() {
                             </>
                           )}
 
-                          {ex.type === 'fill_blank' && (
-                            <>
-                              <p className="font-medium mb-3">
-                                {typeof ex.questionContent === 'string'
-                                  ? ex.questionContent.replace(/<!--BLANK-->/g, '______')
-                                  : String(ex.questionContent)}
-                              </p>
-                              <div className="space-y-2">
-                                {Array.from({ length: ex.partialScoring?.totalBlanks || 1 }).map((_, blankIndex) => (
-                                  <input
-                                    key={blankIndex}
-                                    type="text"
-                                    placeholder={`Answer for blank ${blankIndex + 1}...`}
-                                    value={(Array.isArray(exerciseAnswers[index]) ? exerciseAnswers[index][blankIndex] : '') || ''}
-                                    onChange={(e) => {
-                                      const currentAnswers = Array.isArray(exerciseAnswers[index])
-                                        ? [...exerciseAnswers[index]]
-                                        : Array(ex.partialScoring?.totalBlanks || 1).fill('');
-                                      currentAnswers[blankIndex] = e.target.value;
-                                      setExerciseAnswers((prev) => ({ ...prev, [index]: currentAnswers }));
-                                    }}
-                                    className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                  />
-                                ))}
-                              </div>
-                            </>
-                          )}
+                          {ex.type === 'fill_blank' && (() => {
+                            // Get question text and count blanks
+                            const questionText = typeof ex.questionContent === 'string'
+                              ? ex.questionContent
+                              : String(ex.questionContent);
+                            const blankCount = (questionText.match(/<!--BLANK-->/g) || []).length || 1;
+                            return (
+                              <>
+                                <p className="font-medium mb-3">
+                                  {questionText.replace(/<!--BLANK-->/g, '______')}
+                                </p>
+                                <div className="space-y-2">
+                                  {Array.from({ length: blankCount }).map((_, blankIndex) => (
+                                    <input
+                                      key={blankIndex}
+                                      type="text"
+                                      placeholder={`Answer for blank ${blankIndex + 1}...`}
+                                      value={(Array.isArray(exerciseAnswers[index]) ? exerciseAnswers[index][blankIndex] : '') || ''}
+                                      onChange={(e) => {
+                                        const currentAnswers = Array.isArray(exerciseAnswers[index])
+                                          ? [...exerciseAnswers[index]]
+                                          : Array(blankCount).fill('');
+                                        currentAnswers[blankIndex] = e.target.value;
+                                        setExerciseAnswers((prev) => ({ ...prev, [index]: currentAnswers }));
+                                      }}
+                                      className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                  ))}
+                                </div>
+                              </>
+                            );
+                          })()}
 
                           {ex.type === 'open_ended' && (
                             <>

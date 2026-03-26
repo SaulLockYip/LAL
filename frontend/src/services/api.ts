@@ -209,70 +209,96 @@ export async function generateExercise(
   articleId: string,
   onProgress?: (progress: ProgressInfo) => void
 ): Promise<Exercise[]> {
-  const response = await fetch(`${API_BASE}/exercises/generate`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ articleId }),
-  });
+  // Create abort controller for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minute timeout
 
-  if (!response.ok) {
-    const data = await response.json();
-    throw new Error(data.error?.message || 'Failed to generate exercises');
-  }
+  try {
+    const response = await fetch(`${API_BASE}/exercises/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ articleId }),
+      signal: controller.signal,
+    });
 
-  // Handle streaming response (NDJSON)
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error('No response body');
-  }
+    clearTimeout(timeoutId);
 
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let finalData: Exercise[] | null = null;
-  let sessionId: string | null = null;
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error?.message || 'Failed to generate exercises');
+    }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    // Handle streaming response (NDJSON)
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('No response body');
+    }
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalData: Exercise[] | null = null;
+    let sessionId: string | null = null;
+    let lastError: Error | null = null;
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.success && parsed.data) {
-          if (parsed.data.progress) {
-            // Progress update
-            onProgress?.(parsed.data.progress);
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.success && parsed.data) {
+            if (parsed.data.progress) {
+              // Progress update
+              onProgress?.(parsed.data.progress);
+            }
+            if (parsed.data.exercises) {
+              // Final response with exercises
+              finalData = parsed.data.exercises;
+              sessionId = parsed.data.sessionId;
+            }
+          } else if (parsed.success === false && parsed.error) {
+            // Error response from server
+            throw new Error(parsed.error.message || 'Server error during generation');
           }
-          if (parsed.data.exercises) {
-            // Final response with exercises
-            finalData = parsed.data.exercises;
-            sessionId = parsed.data.sessionId;
+        } catch (e) {
+          if (e instanceof Error) {
+            lastError = e;
+            // If we got an error from parsing, still might want to continue for progress updates
+            console.warn('NDJSON parse warning:', e.message);
           }
         }
-      } catch {
-        // Skip invalid JSON lines
       }
     }
-  }
 
-  if (!finalData) {
-    throw new Error('Failed to generate exercises: no data received');
-  }
+    if (!finalData) {
+      if (lastError) {
+        throw lastError;
+      }
+      throw new Error('Failed to generate exercises: no data received');
+    }
 
-  // Attach sessionId to exercises for later use
-  if (sessionId) {
-    finalData = finalData.map(ex => ({ ...ex, sessionId }));
-  }
+    // Attach sessionId to exercises for later use
+    if (sessionId) {
+      finalData = finalData.map(ex => ({ ...ex, sessionId }));
+    }
 
-  return finalData;
+    return finalData;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Exercise generation timed out after 10 minutes');
+    }
+    throw error;
+  }
 }
 
 export interface GradingResult {
@@ -290,72 +316,97 @@ export async function submitExercise(
   sessionId?: string,
   onProgress?: (progress: ProgressInfo) => void
 ): Promise<{ exercises: Exercise[]; grading: GradingResult }> {
-  // Convert answers array to the format expected by backend: [{ questionIndex, answer }]
-  const formattedAnswers = answers.map((answer, index) => ({
-    questionIndex: index,
-    answer,
-  }));
+  // Create abort controller for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minute timeout
 
-  const response = await fetch(`${API_BASE}/exercises/${exerciseId}/submit`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ answers: formattedAnswers, sessionId }),
-  });
+  try {
+    // Convert answers array to the format expected by backend: [{ questionIndex, answer }]
+    const formattedAnswers = answers.map((answer, index) => ({
+      questionIndex: index,
+      answer,
+    }));
 
-  if (!response.ok) {
-    const data = await response.json();
-    throw new Error(data.error?.message || 'Failed to submit exercise');
-  }
+    const response = await fetch(`${API_BASE}/exercises/${exerciseId}/submit`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ answers: formattedAnswers, sessionId }),
+      signal: controller.signal,
+    });
 
-  // Handle streaming response (NDJSON)
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error('No response body');
-  }
+    clearTimeout(timeoutId);
 
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let finalData: { exercises: Exercise[]; grading: GradingResult } | null = null;
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error?.message || 'Failed to submit exercise');
+    }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    // Handle streaming response (NDJSON)
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('No response body');
+    }
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalData: { exercises: Exercise[]; grading: GradingResult } | null = null;
+    let lastError: Error | null = null;
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.success && parsed.data) {
-          if (parsed.data.progress) {
-            // Progress update
-            onProgress?.(parsed.data.progress);
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.success && parsed.data) {
+            if (parsed.data.progress) {
+              // Progress update
+              onProgress?.(parsed.data.progress);
+            }
+            if (parsed.data.exercises && parsed.data.grading) {
+              // Final response
+              finalData = {
+                exercises: parsed.data.exercises,
+                grading: parsed.data.grading,
+              };
+            }
+          } else if (parsed.success === false && parsed.error) {
+            // Error response from server
+            throw new Error(parsed.error.message || 'Server error during grading');
           }
-          if (parsed.data.exercises && parsed.data.grading) {
-            // Final response
-            finalData = {
-              exercises: parsed.data.exercises,
-              grading: parsed.data.grading,
-            };
+        } catch (e) {
+          if (e instanceof Error) {
+            lastError = e;
+            console.warn('NDJSON parse warning:', e.message);
           }
         }
-      } catch {
-        // Skip invalid JSON lines
       }
     }
-  }
 
-  if (!finalData) {
-    throw new Error('Failed to submit exercise: no data received');
-  }
+    if (!finalData) {
+      if (lastError) {
+        throw lastError;
+      }
+      throw new Error('Failed to submit exercise: no data received');
+    }
 
-  return finalData;
+    return finalData;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Grading timed out after 10 minutes');
+    }
+    throw error;
+  }
 }
 
 export async function getExercises(articleId: string): Promise<Exercise[]> {

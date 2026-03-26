@@ -29,6 +29,18 @@ function errorResponse(code: string, message: string) {
 
 // POST /api/exercises/generate - Generate exercises for article
 exercisesRouter.post('/generate', async (req: Request, res: Response) => {
+  // Helper to send error during streaming - must not use res.json() after streaming starts
+  const sendStreamingError = (code: string, message: string) => {
+    console.error(`Streaming error: ${code} - ${message}`);
+    if (!res.headersSent) {
+      res.status(500).json(errorResponse(code, message));
+      return;
+    }
+    // If headers already sent, write error as NDJSON line and end
+    res.write(JSON.stringify(errorResponse(code, message)) + '\n');
+    res.end();
+  };
+
   try {
     const { articleId, options } = req.body;
 
@@ -76,8 +88,8 @@ exercisesRouter.post('/generate', async (req: Request, res: Response) => {
     // Generate a session ID to group exercises taken together
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    // Set headers for streaming response
-    res.setHeader('Content-Type', 'application/json');
+    // Set headers for streaming NDJSON response
+    res.setHeader('Content-Type', 'application/x-ndjson');
     res.setHeader('Transfer-Encoding', 'chunked');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -93,13 +105,19 @@ exercisesRouter.post('/generate', async (req: Request, res: Response) => {
     })) + '\n');
 
     // Generate exercises using AI with proper language settings
+    // Add timeout to prevent hanging - 5 minute max for AI generation
     const decodedContent = decodeBase64Content(article.content);
-    const exercises = await generateExercises(decodedContent, wordListJson, {
-      userNativeLanguage: user?.nativeLanguage,
-      userTargetLanguage: user?.targetLanguage,
-      userLevel: user?.currentLevel,
-      countPerType: options?.countPerType,
-    });
+    const exercises = await Promise.race([
+      generateExercises(decodedContent, wordListJson, {
+        userNativeLanguage: user?.nativeLanguage,
+        userTargetLanguage: user?.targetLanguage,
+        userLevel: user?.currentLevel,
+        countPerType: options?.countPerType,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Exercise generation timed out after 5 minutes - please try again')), 300000)
+      )
+    ]);
 
     // Build generation progress steps
     const exerciseTypes: Record<ExerciseType, string> = {
@@ -173,6 +191,7 @@ exercisesRouter.post('/generate', async (req: Request, res: Response) => {
         questionContent: parseQuestionContent(ex.questionContent, ex.type),
         options: ex.options ? JSON.parse(ex.options) : null,
         correctAnswers: ex.correctAnswers ? JSON.parse(ex.correctAnswers) : null,
+        partialScoring: ex.partialScoring ? JSON.parse(ex.partialScoring) : null,
         explanation: ex.explanation,
         status: ex.status,
         sessionId: ex.sessionId,
@@ -184,7 +203,7 @@ exercisesRouter.post('/generate', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error generating exercises:', error);
     const message = error instanceof Error ? error.message : 'Failed to generate exercises';
-    res.status(500).json(errorResponse('AI_ERROR', message));
+    sendStreamingError('AI_ERROR', message);
     return;
   }
 });
@@ -203,10 +222,22 @@ function parseQuestionContent(content: string, type: string): unknown {
 
 // POST /api/exercises/:id/submit - Submit answers and grade
 exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    const { answers, sessionId } = req.body; // Array of { questionIndex, answer }
+  const id = req.params.id as string;
+  const { answers, sessionId } = req.body; // Array of { questionIndex, answer }
 
+  // Helper to send error during streaming - must not use res.json() after streaming starts
+  const sendStreamingError = (code: string, message: string) => {
+    console.error(`Streaming error: ${code} - ${message}`);
+    if (!res.headersSent) {
+      res.status(500).json(errorResponse(code, message));
+      return;
+    }
+    // If headers already sent, write error as NDJSON line and end
+    res.write(JSON.stringify(errorResponse(code, message)) + '\n');
+    res.end();
+  };
+
+  try {
     const parsedId = parseInt(id);
     if (isNaN(parsedId)) {
       res.status(400).json(errorResponse('VALIDATION_ERROR', 'Invalid exercise ID'));
@@ -256,8 +287,8 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
     // Decode article content BEFORE passing to grading
     const decodedContent = decodeBase64Content(article.content);
 
-    // Set headers for streaming response
-    res.setHeader('Content-Type', 'application/json');
+    // Set headers for streaming NDJSON response
+    res.setHeader('Content-Type', 'application/x-ndjson');
     res.setHeader('Transfer-Encoding', 'chunked');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -309,17 +340,23 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
     })) + '\n');
 
     // Grade with AI (pass decoded content, not base64)
-    const gradingResult = await gradeExercises(
-      exercisesJson,
-      userAnswersJson,
-      decodedContent,
-      wordListJson,
-      {
-        userNativeLanguage: user?.nativeLanguage,
-        userTargetLanguage: user?.targetLanguage,
-        userLevel: user?.currentLevel,
-      }
-    );
+    // Add timeout to prevent hanging - 5 minute max for AI grading
+    const gradingResult = await Promise.race([
+      gradeExercises(
+        exercisesJson,
+        userAnswersJson,
+        decodedContent,
+        wordListJson,
+        {
+          userNativeLanguage: user?.nativeLanguage,
+          userTargetLanguage: user?.targetLanguage,
+          userLevel: user?.currentLevel,
+        }
+      ),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Grading timed out after 5 minutes - please try again')), 300000)
+      )
+    ]);
 
     // Create a map of exercise ID to grading result for easy lookup
     const gradingMap = new Map<number, GradingResult['results'][0]>();
@@ -423,7 +460,7 @@ exercisesRouter.post('/:id/submit', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error grading exercise:', error);
     const message = error instanceof Error ? error.message : 'Failed to grade exercise';
-    res.status(500).json(errorResponse('AI_ERROR', message));
+    sendStreamingError('AI_ERROR', message);
     return;
   }
 });

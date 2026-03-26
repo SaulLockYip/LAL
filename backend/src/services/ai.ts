@@ -122,15 +122,30 @@ async function chatWithRetry(
   messages: ChatMessage[],
   options: ChatOptions,
   retries = 10,
-  delayMs = 3000
+  delayMs = 3000,
+  timeoutMs = 180000 // 3 minute timeout per attempt
 ): Promise<string> {
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      return await chat(messages, options);
+      // Create a promise that races the chat call against a timeout
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`AI request timed out after ${timeoutMs}ms`)), timeoutMs);
+      });
+
+      const result = await Promise.race([
+        chat(messages, options),
+        timeoutPromise
+      ]);
+
+      return result;
     } catch (error) {
       lastError = error as Error;
+      // If it was a timeout, don't retry - just fail fast
+      if (error instanceof Error && error.message.includes('timed out')) {
+        throw error;
+      }
       if (attempt < retries - 1) {
         await sleep(delayMs);
       }
