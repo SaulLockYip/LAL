@@ -1,6 +1,6 @@
 [project]
 name = "lal-cli"
-version = "0.2.2"
+version = "0.2.5"
 description = "CLI tool for Learn Any Language (LAL)"
 requires-python = ">=3.10"
 dependencies = [

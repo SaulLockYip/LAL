@@ -418,21 +418,16 @@ Das Wetter heute ist schon gut...
 ### First-Time Setup
 
 ```bash
-# 1. Install CLI via uv
-git clone https://github.com/SaulLockYip/LAL.git
-cd LAL/cli
-./install.sh
+# Install CLI (clones repo, installs CLI, initializes project)
+curl -fsSL https://raw.githubusercontent.com/SaulLockYip/LAL/main/install.sh | bash
 
-# 2. Initialize the project (clones repo, installs deps, builds)
-lal-cli init
-
-# 3. Configure your AI model
+# Configure your AI model
 lal-cli models add anthropic --model-name "claude-3-5-sonnet" --key "your-key"
 
-# 4. Set up your profile
+# Set up your profile
 lal-cli user config --name "Your Name" --native "English" --target "German" --current-level "A2"
 
-# 5. Start the server (serves both frontend and API)
+# Start the server (serves both frontend and API)
 lal-cli start
 ```
 

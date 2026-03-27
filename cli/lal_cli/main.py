@@ -44,7 +44,7 @@ def _get_frontend_dir() -> Path:
     return _get_project_root() / "frontend"
 
 @click.group()
-@click.version_option(version="0.2.2")
+@click.version_option(version="0.2.5")
 def cli() -> None:
     """LAL CLI - Learn Any Language CLI Tool.
 
@@ -426,97 +426,64 @@ def _cleanup_processes() -> None:
 
 
 @click.command("init")
-@click.option("--repo", default="https://github.com/SaulLockYip/LAL.git", help="Git repository to clone")
-@click.option("--dir", "target_dir", default=None, help="Target directory (default: ~/LAL)")
-@click.option("--skip-clone", is_flag=True, help="Skip git clone (use existing directory)")
-def init(repo: str, target_dir: str | None, skip_clone: bool) -> None:
+def init() -> None:
     """Initialize the LAL project.
 
-    Clones the repository to ~/LAL (or specified directory), installs dependencies,
-    builds the frontend, and sets up the database.
+    Installs dependencies, builds the frontend, and sets up the database.
+    Assumes the repository has already been cloned (via install.sh).
     """
     click.echo("Initializing LAL project...")
 
-    # Determine target directory
-    if target_dir:
-        install_dir = Path(target_dir).expanduser().resolve()
-    else:
-        install_dir = DEFAULT_PROJECT_ROOT
-
-    # Step 1: Clone repo if needed
-    click.echo("\n[1/6] Setting up project directory...")
-    if install_dir.exists() and any(install_dir.iterdir()) and not skip_clone:
-        click.echo(f"  Directory already exists: {install_dir}")
-        click.echo("  Use --skip-clone to use existing directory")
-    elif not install_dir.exists():
-        click.echo(f"  Cloning repository to: {install_dir}")
-        try:
-            subprocess.run(["git", "clone", repo, str(install_dir)], check=True, capture_output=True)
-            click.echo("  Repository cloned successfully")
-        except subprocess.CalledProcessError as e:
-            click.echo(f"  Error cloning repository: {e.stderr.decode() if e.stderr else str(e)}", err=True)
-            return
-        except FileNotFoundError:
-            click.echo("  Error: git is not installed. Please install git first.", err=True)
-            return
-    else:
-        click.echo(f"  Empty directory, skipping clone: {install_dir}")
-
-    # Use install_dir as project root
+    install_dir = DEFAULT_PROJECT_ROOT
     backend_dir = install_dir / "backend"
     frontend_dir = install_dir / "frontend"
 
-    # Step 2: Install backend dependencies
-    click.echo("\n[2/6] Installing backend dependencies...")
-    if backend_dir.exists():
-        try:
-            subprocess.run(["npm", "install"], cwd=str(backend_dir), check=True)
-            click.echo("  Backend dependencies installed")
-        except subprocess.CalledProcessError as e:
-            click.echo(f"  Error installing backend dependencies: {e.stderr.decode() if e.stderr else str(e)}", err=True)
-            return
-        except FileNotFoundError:
-            click.echo("  Error: npm is not installed. Please install Node.js first.", err=True)
-            return
-    else:
-        click.echo("  Backend directory not found", err=True)
+    # Step 1: Install backend dependencies
+    click.echo("\n[1/5] Installing backend dependencies...")
+    if not backend_dir.exists():
+        click.echo(f"  Error: Backend directory not found at: {backend_dir}", err=True)
+        click.echo("  Run 'git clone https://github.com/SaulLockYip/LAL.git' first.", err=True)
+        return
+    try:
+        subprocess.run(["npm", "install"], cwd=str(backend_dir), check=True)
+        click.echo("  Backend dependencies installed")
+    except subprocess.CalledProcessError as e:
+        click.echo(f"  Error installing backend dependencies: {e.stderr.decode() if e.stderr else str(e)}", err=True)
+        return
+    except FileNotFoundError:
+        click.echo("  Error: npm is not installed. Please install Node.js first.", err=True)
         return
 
-    # Step 3: Install frontend dependencies
-    click.echo("\n[3/6] Installing frontend dependencies...")
-    if frontend_dir.exists():
-        try:
-            subprocess.run(["npm", "install"], cwd=str(frontend_dir), check=True)
-            click.echo("  Frontend dependencies installed")
-        except subprocess.CalledProcessError as e:
-            click.echo(f"  Error installing frontend dependencies: {e.stderr.decode() if e.stderr else str(e)}", err=True)
-            return
-    else:
-        click.echo("  Frontend directory not found", err=True)
+    # Step 2: Install frontend dependencies
+    click.echo("\n[2/5] Installing frontend dependencies...")
+    if not frontend_dir.exists():
+        click.echo("  Error: Frontend directory not found", err=True)
+        return
+    try:
+        subprocess.run(["npm", "install"], cwd=str(frontend_dir), check=True)
+        click.echo("  Frontend dependencies installed")
+    except subprocess.CalledProcessError as e:
+        click.echo(f"  Error installing frontend dependencies: {e.stderr.decode() if e.stderr else str(e)}", err=True)
         return
 
-    # Step 4: Build frontend static files
-    click.echo("\n[4/6] Building frontend...")
-    if frontend_dir.exists():
-        click.echo("  Running npm run build...")
-        result = subprocess.run(
-            ["npm", "run", "build"],
-            cwd=str(frontend_dir),
-            capture_output=True,
-            text=True
-        )
-        if result.returncode != 0:
-            click.echo(f"  Error building frontend:", err=True)
-            click.echo(result.stdout, err=True)
-            click.echo(result.stderr, err=True)
-            return
-        click.echo("  Frontend built successfully")
-    else:
-        click.echo("  Frontend directory not found", err=True)
+    # Step 3: Build frontend static files
+    click.echo("\n[3/5] Building frontend...")
+    click.echo("  Running npm run build...")
+    result = subprocess.run(
+        ["npm", "run", "build"],
+        cwd=str(frontend_dir),
+        capture_output=True,
+        text=True
+    )
+    if result.returncode != 0:
+        click.echo(f"  Error building frontend:", err=True)
+        click.echo(result.stdout, err=True)
+        click.echo(result.stderr, err=True)
         return
+    click.echo("  Frontend built successfully")
 
-    # Step 5: Create .env file in backend if it doesn't exist
-    click.echo("\n[5/6] Setting up backend environment...")
+    # Step 4: Create .env file in backend if it doesn't exist
+    click.echo("\n[4/5] Setting up backend environment...")
     env_file = backend_dir / ".env"
     db_path_for_prisma = install_dir / ".learn-any-language" / "database.sqlite"
     if env_file.exists():
@@ -534,8 +501,8 @@ PORT={BACKEND_PORT}
         except Exception as e:
             click.echo(f"  Warning: Could not create .env file: {e}", err=True)
 
-    # Step 6: Setup Prisma database
-    click.echo("\n[6/6] Setting up Prisma database...")
+    # Step 5: Setup Prisma database
+    click.echo("\n[5/5] Setting up Prisma database...")
     db_dir = db_path_for_prisma.parent
     db_dir.mkdir(parents=True, exist_ok=True)
     # Remove old database if exists (to avoid schema conflicts)
