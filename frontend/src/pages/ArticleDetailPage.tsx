@@ -6,6 +6,7 @@ import { Sentence } from '../services/tts';
 import { ChatBox } from '../components/ChatBox/ChatBox';
 import { WordCard } from '../components/WordCard';
 import { TTSPlayer } from '../components/TTSPlayer';
+import { tokenizeParagraph } from '../utils/tokenize';
 
 const PENDING_LOOKUP_PREFIX = 'pending_word_lookup_';
 const PENDING_LOOKUP_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -788,21 +789,22 @@ export function ArticleDetailPage() {
     // Split into paragraphs and make words clickable
     return content.split('\n').map((paragraph, i) => (
       <p key={i} className="mb-4 leading-relaxed">
-        {paragraph.split(/\s+/).map((word, j) => {
-          const cleanWord = word.replace(/[.,!?;:'"()]/g, '');
-          if (cleanWord.length < 2) return word + ' ';
-          return (
-            <span key={j}>
-              <span
-                onClick={(e) => handleWordClick(cleanWord, e)}
-                onMouseEnter={() => prefetchWord(cleanWord)}
-                onMouseLeave={() => cancelPrefetch(cleanWord)}
-                className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded transition-colors"
-              >
-                {word}
-              </span>{' '}
-            </span>
-          );
+        {tokenizeParagraph(paragraph).map((token, j) => {
+          if (token.isWord) {
+            return (
+              <span key={j}>
+                <span
+                  onClick={(e) => handleWordClick(token.text, e)}
+                  onMouseEnter={() => prefetchWord(token.text)}
+                  onMouseLeave={() => cancelPrefetch(token.text)}
+                  className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded transition-colors"
+                >
+                  {token.displayText}
+                </span>
+              </span>
+            );
+          }
+          return <span key={j}>{token.displayText}</span>;
         })}
       </p>
     ));
