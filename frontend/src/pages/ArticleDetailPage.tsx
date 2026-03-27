@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, Sparkles, Play, Send, GripVertical, List, Bot, Volume2, Trash2 } from 'lucide-react';
 import { getArticle, getWords, createWord, deleteWord, generateExercise, submitExercise, getExercises, Article, Word, WordLookupResult, DerivationEtymologyResult, getTTS, Exercise, SentenceTiming, ProgressInfo } from '../services/api';
 import { Sentence } from '../services/tts';
-import { LLMChat } from '../components/LLMChat';
+import { ChatBox } from '../components/ChatBox/ChatBox';
 import { WordCard } from '../components/WordCard';
 import { TTSPlayer } from '../components/TTSPlayer';
 
@@ -1121,24 +1121,34 @@ export function ArticleDetailPage() {
 
             {/* Chat Panel */}
             {rightPanelTab === 'chat' && (
-              <LLMChat
-                articleId={id!}
-                articleContent={(() => {
-                  let content = article.content;
-                  try {
-                    const decoded = atob(content);
-                    // Handle double encoding
-                    if (/^[A-Za-z0-9+/=]+$/.test(decoded) && decoded.length > 10) {
-                      content = atob(decoded);
-                    } else {
-                      content = decoded;
-                    }
-                  } catch {}
-                  return content;
-                })()}
-                wordList={words.map((w) => w.word)}
-                userInfo={userInfo || undefined}
-              />
+              <div className="relative h-full flex flex-col">
+                <ChatBox
+                  userInfo={userInfo ? {
+                    targetLanguage: userInfo.targetLanguage,
+                    nativeLanguage: userInfo.nativeLanguage,
+                    currentLevel: userInfo.currentLevel,
+                  } : undefined}
+                  articleContext={id ? {
+                    articleId: id,
+                    articleTitle: article.title,
+                    articleContent: (() => {
+                      let content = article.content;
+                      try {
+                        const decoded = atob(content);
+                        if (/^[A-Za-z0-9+/=]+$/.test(decoded) && decoded.length > 10) {
+                          content = atob(decoded);
+                        } else {
+                          content = decoded;
+                        }
+                      } catch {}
+                      return content;
+                    })(),
+                  } : undefined}
+                  wordListContext={{
+                    wordList: words.map((w) => w.word),
+                  }}
+                />
+              </div>
             )}
           </div>
         )}
