@@ -110,19 +110,30 @@ export async function streamChat(options: StreamingOptions): Promise<string> {
       for (const line of lines) {
         if (!line.trim()) continue;
 
+        // Strip "data: " prefix for SSE format
+        let dataLine = line;
+        if (dataLine.startsWith('data: ')) {
+          dataLine = dataLine.slice(6);
+        } else if (dataLine.startsWith('data:')) {
+          // Handle case where there's no space after data:
+          dataLine = dataLine.slice(5).trimStart();
+        }
+
+        if (!dataLine.trim()) continue;
+
         try {
-          const parsed = JSON.parse(line);
+          const parsed = JSON.parse(dataLine);
 
           if (parsed.success === false && parsed.error) {
             throw new Error(parsed.error.message || 'Server error during streaming');
           }
 
-          if (parsed.data?.chunk) {
-            fullResponse += parsed.data.chunk;
-            onChunk?.(parsed.data.chunk);
+          if (parsed.chunk) {
+            fullResponse += parsed.chunk;
+            onChunk?.(parsed.chunk);
           }
 
-          if (parsed.data?.done) {
+          if (parsed.done) {
             onComplete?.(fullResponse);
           }
         } catch (e) {

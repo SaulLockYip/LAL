@@ -92,10 +92,18 @@ export function ChatHistory({
         ) : (
           <div className="p-2 space-y-1">
             {conversations.map((conversation) => (
-              <button
+              <div
                 key={conversation.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => onSelectConversation(conversation)}
-                className={`w-full flex items-center justify-between p-3 rounded-xl transition-all text-left group ${
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelectConversation(conversation);
+                  }
+                }}
+                className={`w-full flex items-center justify-between p-3 rounded-xl transition-all text-left group cursor-pointer ${
                   currentConversationId === conversation.id
                     ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
                     : 'hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
@@ -117,7 +125,7 @@ export function ChatHistory({
                 >
                   <Trash2 size={14} />
                 </button>
-              </button>
+              </div>
             ))}
           </div>
         )}
