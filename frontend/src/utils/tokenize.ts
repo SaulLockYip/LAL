@@ -55,14 +55,6 @@ function isCJKPunctuation(char: string): boolean {
   return (code >= 0x3000 && code <= 0x303F);
 }
 
-// Tokenize Latin/English text: split by whitespace, clean punctuation
-function tokenizeLatin(text: string): string[] {
-  return text
-    .split(/\s+/)
-    .map(word => word.replace(/[.,!?;:'"()[\]{}·–—$/\\]/g, ''))
-    .filter(word => word.length > 0);
-}
-
 // Intl.Segmenter type declaration for older TypeScript versions
 declare namespace Intl {
   interface Segmenter {
@@ -79,17 +71,27 @@ declare namespace Intl {
   const Segmenter: SegmenterConstructor;
 }
 
+// CJK segment with word/non-word classification
+interface CJKSegment {
+  text: string;
+  isWord: boolean;
+}
+
 // Tokenize CJK text using Intl.Segmenter
-function tokenizeCJK(text: string): string[] {
+// Returns ALL segments (words AND punctuation) so original text can be reconstructed
+function tokenizeCJK(text: string): CJKSegment[] {
   // Intl.Segmenter is supported in modern browsers
   if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
     try {
       const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
       const segments = [...segmenter.segment(text)];
       return segments
-        .filter(s => s.isWord && !/^\s+$/.test(s.segment))
-        .map(s => s.segment.trim())
-        .filter(w => w.length > 0);
+        .filter(s => !/^\s+$/.test(s.segment)) // Filter out whitespace-only segments
+        .map(s => ({
+          text: s.segment,
+          isWord: s.isWord
+        }))
+        .filter(s => s.text.length > 0);
     } catch {
       // Fallback to character-level if Intl.Segmenter fails
     }
@@ -100,11 +102,13 @@ function tokenizeCJK(text: string): string[] {
   return text.split('').filter(char => {
     const code = char.codePointAt(0);
     if (!code) return false;
-    // Filter out spaces and CJK punctuation
+    // Filter out spaces only (preserve punctuation as non-word tokens)
     if (/\s/.test(char)) return false;
-    if (isCJKPunctuation(char)) return false;
     return true;
-  });
+  }).map(char => ({
+    text: char,
+    isWord: !isCJKPunctuation(char)
+  }));
 }
 
 // Split text into segments by script type
@@ -175,54 +179,69 @@ export function tokenizeParagraph(paragraph: string): Token[] {
 
       for (const segment of scriptSegments) {
         if (segment.script === 'cjk') {
-          const words = tokenizeCJK(segment.text);
-          for (const word of words) {
+          const cjkSegments = tokenizeCJK(segment.text);
+          for (const seg of cjkSegments) {
             tokens.push({
-              text: word,
-              isWord: true,
-              displayText: word
+              text: seg.isWord ? seg.text : '', // Only words have text for lookup
+              isWord: seg.isWord,
+              displayText: seg.text // Always preserve original text
             });
           }
         } else if (segment.script === 'latin') {
-          const words = tokenizeLatin(segment.text);
-          for (const word of words) {
-            if (word.length >= 1) { // Include single chars for CJK mix
-              tokens.push({
-                text: word,
-                isWord: true,
-                displayText: word
-              });
+          // For Latin, use simple whitespace splitting and preserve original spacing
+          const parts = segment.text.split(/(\s+)/);
+          for (const part of parts) {
+            if (/^\s+$/.test(part)) {
+              // Whitespace - preserve as non-word token
+              tokens.push({ text: '', isWord: false, displayText: part });
+            } else if (part.length > 0) {
+              // Word - clean punctuation for lookup
+              const cleaned = part.replace(/[.,!?;:'"()[\]{}·–—$/\\]/g, '');
+              if (cleaned.length > 0) {
+                tokens.push({
+                  text: cleaned,
+                  isWord: true,
+                  displayText: part // Preserve original including punctuation
+                });
+              }
             }
           }
         }
       }
     } else if (hasCJKChars) {
-      // Pure CJK
-      const words = tokenizeCJK(line);
-      for (const word of words) {
+      // Pure CJK - use Intl.Segmenter to get all segments
+      const cjkSegments = tokenizeCJK(line);
+      for (const seg of cjkSegments) {
         tokens.push({
-          text: word,
-          isWord: true,
-          displayText: word
+          text: seg.isWord ? seg.text : '', // Only words have text for lookup
+          isWord: seg.isWord,
+          displayText: seg.text // Always preserve original text
         });
       }
     } else {
-      // Pure Latin/English
-      const words = tokenizeLatin(line);
-      for (const word of words) {
-        if (word.length >= 1) {
-          tokens.push({
-            text: word,
-            isWord: true,
-            displayText: word
-          });
+      // Pure Latin/English - preserve original spacing
+      const parts = line.split(/(\s+)/);
+      for (const part of parts) {
+        if (/^\s+$/.test(part)) {
+          // Whitespace - preserve as non-word token
+          tokens.push({ text: '', isWord: false, displayText: part });
+        } else if (part.length > 0) {
+          // Word - clean punctuation for lookup
+          const cleaned = part.replace(/[.,!?;:'"()[\]{}·–—$/\\]/g, '');
+          if (cleaned.length > 0) {
+            tokens.push({
+              text: cleaned,
+              isWord: true,
+              displayText: part // Preserve original including punctuation
+            });
+          }
         }
       }
     }
 
-    // Add space between lines
-    if (tokens.length > 0) {
-      tokens[tokens.length - 1].displayText += ' ';
+    // Add space between lines (as a separate token to preserve structure)
+    if (tokens.length > 0 && tokens[tokens.length - 1].displayText !== ' ') {
+      tokens.push({ text: '', isWord: false, displayText: ' ' });
     }
   }
 
