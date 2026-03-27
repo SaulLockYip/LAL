@@ -6,6 +6,7 @@ import { WordListPage } from './pages/WordListPage'
 import { ExercisesPage } from './pages/ExercisesPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TTSPage } from './pages/TTSPage'
+import { ChatBox } from './components/ChatBox'
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
+      <ChatBox />
     </div>
   )
 }
