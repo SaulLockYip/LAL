@@ -42,23 +42,33 @@ LAL_V0.1.0/
 - Word Card displays: part of speech, phonetic, definition, translation (hidden by default), examples
 - Derivation and Etymology analysis on-demand via AI
 
-### AI Chat Assistant
-- Embedded LLM chat in the reading page
-- Auto-injects article context and user settings
-- Session persistence per article
+### AI Chat Assistant (ChatBox)
+- Floating chat panel with inline embedding in article reading
+- Session persistence across conversations with ChatHistory
+- Context-aware AI with ChatContextPicker (Article, Word List, Exercises, Global)
+- Real-time streaming responses with SSE
+- Supports both Anthropic Claude and OpenAI GPT models
+- Keyboard shortcuts: Ctrl+Enter to send, ↑ to edit last message
+- Per-conversation regeneration support
 
 ### Word List
-- Save words from article reading
-- Context-aware word records
-- Filter by article, search, and sort
+- Save words from article reading with one-click lookup
+- Word Card displays: part of speech, phonetic, definition, translation, examples
+- Derivation and Etymology analysis on-demand via AI
+- Close button during AI lookup loading (prevents blocking)
 
 ### Exercises
 - AI-generated IELTS-style exercises based on articles and word lists
 - Support for multiple choice and fill-in-the-blank questions
 - Auto-grading with 100-point scale scoring
+- Per-question detailed analysis (逐题解析)
+- Real-time progress visualization during generation and grading
 
 ### Text-to-Speech (TTS)
-- Pronunciation support via browser Web Speech API
+- Full article reading with Web Speech API pronunciation
+- Per-sentence audio playback with visual highlighting
+- TTS history management with hard delete functionality
+- Speaker voice selection support
 
 ## Quick Start
 
@@ -158,6 +168,19 @@ lal-cli models list
 lal-cli models delete <name>
 ```
 
+### Settings Management
+
+```bash
+# Show all settings (user, AI, voices)
+lal-cli settings show
+
+# List available TTS voices
+lal-cli settings voices
+
+# Test AI configuration
+lal-cli settings ai-test
+```
+
 ### User Management
 
 ```bash
@@ -176,6 +199,9 @@ lal-cli articles add --title "Article Title" --content "Article content here..."
 
 # Add with source URL and notes
 lal-cli articles add --title "Title" --source "https://example.com" --content "Content" --notes "My notes"
+
+# Get a single article by ID
+lal-cli articles get <article-id>
 
 # List all articles
 lal-cli articles list
@@ -277,3 +303,8 @@ Session storage: `~/.learn-any-language/sessions/{article_id}/conversation.json`
 | POST | `/api/exercises/:id/submit` | Submit and grade |
 | GET/PUT | `/api/settings/user` | User settings |
 | GET/PUT | `/api/settings/ai` | AI configuration |
+| GET/POST | `/api/chat` | List/create conversations |
+| GET/POST | `/api/chat/:id` | Get conversation with messages |
+| DELETE | `/api/chat/:id` | Delete conversation |
+| POST | `/api/chat/stream` | Streaming chat with AI |
+| GET | `/api/settings/tts-voices` | List TTS voices |

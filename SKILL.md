@@ -9,7 +9,8 @@ The `lal-cli` tool provides commands for managing:
 - **Servers**: Initialize, start, stop, and restart the application
 - **AI Models**: Configure AI providers (Anthropic, OpenAI)
 - **User**: Set up and view user profile
-- **Articles**: Add, list, and delete learning articles
+- **Articles**: Add, list, get, and delete learning articles
+- **Settings**: View settings, TTS voices, and test AI configuration
 
 ## Command Reference
 
@@ -254,6 +255,63 @@ Current User Settings:
 
 ---
 
+### Settings Management
+
+#### `lal-cli settings show`
+
+Display all current settings including user profile, AI configuration, and available TTS voices.
+
+```bash
+lal-cli settings show
+```
+
+**Output:**
+```
+User Settings:
+  Name:             John
+  Native Language:  English
+  Target Language:  German
+  Current Level:    B1
+
+AI Settings:
+  Provider:         anthropic
+  Model:            claude-3-5-sonnet
+  Base URL:         N/A
+
+TTS Voices:
+  en-US:           Microsoft David (en-US)
+  de-DE:           Microsoft Katja (de-DE)
+  ...
+```
+
+---
+
+#### `lal-cli settings voices`
+
+List all available TTS voices for text-to-speech.
+
+```bash
+lal-cli settings voices
+```
+
+---
+
+#### `lal-cli settings ai-test`
+
+Test the configured AI model by sending a simple request.
+
+```bash
+lal-cli settings ai-test
+```
+
+**Output:**
+```
+Testing AI configuration...
+Provider: anthropic
+Model: claude-3-5-sonnet
+AI Response: Hello! I'm ready to help you learn.
+```
+
 ### Article Management
 
 #### `lal-cli articles add`
@@ -328,6 +386,32 @@ lal-cli articles delete abc123...
 **Note:** This permanently deletes the article and cannot be undone.
 
 ---
+
+#### `lal-cli articles get`
+
+Get a single article by ID.
+
+```bash
+lal-cli articles get <article-id>
+```
+
+**Example:**
+```bash
+lal-cli articles get abc123...
+```
+
+**Output:**
+```
+ID:          abc123...
+Title:       Der Wetterbericht
+Level:       A2
+Source:      https://example.com/article
+Created:     2026-03-26 10:00
+Archived:    No
+
+Content:
+Das Wetter heute ist schon gut...
+```
 
 ## Common Workflows
 
@@ -456,6 +540,8 @@ CEFR levels are used for difficulty classification:
 | `articles` | Learning articles |
 | `word_list` | Saved vocabulary |
 | `exercises` | Generated exercises |
+| `conversations` | Chat conversations |
+| `messages` | Chat messages |
 
 ---
 
