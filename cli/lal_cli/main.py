@@ -28,7 +28,7 @@ _running_processes: List[subprocess.Popen] = []
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.2.0")
 def cli() -> None:
     """LAL CLI - Learn Any Language CLI Tool.
 
