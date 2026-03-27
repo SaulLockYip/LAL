@@ -110,8 +110,23 @@ function toOpenAIMessages(messages: ChatMessage[]): Array<{ role: string; conten
 }
 
 // Convert messages to Anthropic format
-function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: string; content: string }> {
-  return messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : m.role, content: m.content }));
+// Anthropic requires: system messages in separate 'system' field, messages array has only user/assistant
+function toAnthropicMessages(messages: ChatMessage[]): { messages: Array<{ role: string; content: string }>; system?: string } {
+  const systemMessages: string[] = [];
+  const chatMessages: Array<{ role: string; content: string }> = [];
+
+  for (const m of messages) {
+    if (m.role === 'system') {
+      systemMessages.push(m.content);
+    } else {
+      chatMessages.push({ role: m.role === 'assistant' ? 'assistant' : m.role, content: m.content });
+    }
+  }
+
+  return {
+    messages: chatMessages,
+    system: systemMessages.length > 0 ? systemMessages.join('\n\n') : undefined,
+  };
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -180,9 +195,10 @@ export async function chat(
     // Anthropic
     endpoint = `${baseUrl}/v1/messages`;
     headers['anthropic-version'] = '2023-06-01';
+    const anthropicData = toAnthropicMessages(messages);
     body = {
       model,
-      messages: toAnthropicMessages(messages),
+      ...anthropicData,
       max_tokens: 4096,
     };
   }
@@ -237,9 +253,10 @@ export async function chatStreaming(
   } else {
     endpoint = `${baseUrl}/v1/messages`;
     headers['anthropic-version'] = '2023-06-01';
+    const anthropicData = toAnthropicMessages(messages);
     body = {
       model,
-      messages: toAnthropicMessages(messages),
+      ...anthropicData,
       max_tokens: 4096,
       stream: true,
     };
@@ -263,6 +280,7 @@ export async function chatStreaming(
 
   const decoder = new TextDecoder();
   let buffer = '';
+  let currentEvent = '';
 
   while (true) {
     const { done, value } = await reader.read();
@@ -273,6 +291,12 @@ export async function chatStreaming(
     buffer = lines.pop() || '';
 
     for (const line of lines) {
+      // Track Anthropic event type (e.g., "event: content_block_delta")
+      if (line.startsWith('event: ')) {
+        currentEvent = line.slice(7).trim();
+        continue;
+      }
+
       if (line.startsWith('data: ')) {
         const data = line.slice(6);
         if (data === '[DONE]') continue;
@@ -285,8 +309,14 @@ export async function chatStreaming(
             const choices = parsed.choices as Array<{ delta?: { content?: string } }>;
             chunk = choices?.[0]?.delta?.content || '';
           } else {
-            const content = parsed.content as Array<{ text?: string }>;
-            chunk = content?.[0]?.text || '';
+            // Anthropic streaming: content is in delta.text
+            // Event types: content_block_delta, message_delta, etc.
+            if (currentEvent === 'content_block_delta' || currentEvent === 'message_delta') {
+              const delta = parsed.delta as { text?: string; type?: string };
+              if (delta?.type === 'text_delta') {
+                chunk = delta.text || '';
+              }
+            }
           }
 
           if (chunk) {
