@@ -43,12 +43,8 @@ def _get_frontend_dir() -> Path:
     """Get the frontend directory."""
     return _get_project_root() / "frontend"
 
-# Store running server processes
-_running_processes: List[subprocess.Popen] = []
-
-
 @click.group()
-@click.version_option(version="0.2.0")
+@click.version_option(version="0.2.1")
 def cli() -> None:
     """LAL CLI - Learn Any Language CLI Tool.
 
@@ -562,11 +558,8 @@ def start() -> None:
     """Start the LAL server.
 
     Starts the backend server which serves both the API and frontend static files.
-    Server runs in the background and will continue until 'stop' is called
-    or the process is interrupted.
+    Server runs in the background and will continue until 'lal-cli stop' is called.
     """
-    global _running_processes
-
     backend_dir = _get_backend_dir()
     frontend_dir = _get_frontend_dir()
 
@@ -591,57 +584,40 @@ def start() -> None:
 
     click.echo("Starting server...")
 
-    # Set up signal handlers for graceful shutdown
-    def signal_handler(sig, frame):
-        click.echo("\nShutting down server...")
-        _cleanup_processes()
-        if BACKEND_PID_FILE.exists():
-            BACKEND_PID_FILE.unlink()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    # Start backend server (serves both API and frontend static files)
-    click.echo(f"\nStarting server on port {BACKEND_PORT}...")
+    # Start backend server in background (redirect output to log file)
+    log_file = BACKEND_PID_FILE.parent / "server.log"
     try:
         backend_env = os.environ.copy()
-        backend_proc = subprocess.Popen(
-            ["npm", "start"],
-            cwd=str(backend_dir),
-            env=backend_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
-        )
-        _running_processes.append(backend_proc)
+        with open(log_file, "w") as log:
+            backend_proc = subprocess.Popen(
+                ["npm", "start"],
+                cwd=str(backend_dir),
+                env=backend_env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
+            )
         BACKEND_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
         BACKEND_PID_FILE.write_text(str(backend_proc.pid))
-        click.echo(f"  Server starting (PID: {backend_proc.pid})...")
     except Exception as e:
         click.echo(f"  Error starting server: {e}", err=True)
-        _cleanup_processes()
         return
 
     # Wait for server to start
-    time.sleep(3)
+    time.sleep(2)
 
-    click.echo("\n" + "="*50)
-    click.echo(f"LAL server is running!")
-    click.echo(f"  Frontend: http://localhost:{BACKEND_PORT}")
-    click.echo(f"  API:      http://localhost:{BACKEND_PORT}/api")
-    click.echo("\nPress Ctrl+C to stop the server.")
-
-    # Keep running and stream logs
-    while True:
-        try:
-            line = backend_proc.stdout.readline()
-            if line:
-                click.echo(line.decode(), nl=False)
-            if backend_proc.poll() is not None:
-                break
-        except:
-            break
+    # Verify server is running
+    if _is_port_in_use(BACKEND_PORT):
+        click.echo(f"\nLAL server is running on port {BACKEND_PORT}!")
+        click.echo(f"  Frontend: http://localhost:{BACKEND_PORT}")
+        click.echo(f"  API:      http://localhost:{BACKEND_PORT}/api")
+        click.echo(f"  Logs:     {log_file}")
+        click.echo("\nUse 'lal-cli stop' to stop the server.")
+    else:
+        click.echo(f"\nServer failed to start. Check logs at: {log_file}")
+        if log_file.exists():
+            with open(log_file) as f:
+                click.echo(f.read()[-500:], err=True)
 
 
 @click.command("stop")
@@ -659,8 +635,9 @@ def stop() -> None:
             pid = int(BACKEND_PID_FILE.read_text().strip())
             os.kill(pid, signal.SIGTERM)
             server_stopped = True
-            BACKEND_PID_FILE.unlink()
         except (ValueError, ProcessLookupError, PermissionError):
+            pass
+        finally:
             BACKEND_PID_FILE.unlink()
 
     # Also try port-based kill as fallback
@@ -669,8 +646,10 @@ def stop() -> None:
     else:
         backend_stopped = True
 
-    # Also clean up any processes we started
-    _cleanup_processes()
+    # Clean up log file
+    log_file = BACKEND_PID_FILE.parent / "server.log"
+    if log_file.exists():
+        log_file.unlink()
 
     if not backend_stopped:
         click.echo(f"No server was running on port {BACKEND_PORT}.")
@@ -686,15 +665,17 @@ def restart() -> None:
 
     Stops any running server and then starts it again.
     """
-    global _running_processes
-
     backend_dir = _get_backend_dir()
+    frontend_dir = _get_frontend_dir()
 
     # Stop any running server
     if _is_port_in_use(BACKEND_PORT):
         click.echo("Stopping server...")
         _kill_process_on_port(BACKEND_PORT)
-        _cleanup_processes()
+        BACKEND_PID_FILE.unlink()
+        log_file = BACKEND_PID_FILE.parent / "server.log"
+        if log_file.exists():
+            log_file.unlink()
         time.sleep(1)
     else:
         click.echo("No server was running.")
@@ -704,29 +685,34 @@ def restart() -> None:
         click.echo(f"Error: Backend directory not found at: {backend_dir}", err=True)
         return
 
-    # Start server
+    # Start server in background
+    log_file = BACKEND_PID_FILE.parent / "server.log"
     click.echo("Starting server...")
     try:
         backend_env = os.environ.copy()
-        backend_proc = subprocess.Popen(
-            ["npm", "start"],
-            cwd=str(backend_dir),
-            env=backend_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
-        )
-        _running_processes.append(backend_proc)
-        click.echo(f"  Server starting (PID: {backend_proc.pid})...")
+        with open(log_file, "w") as log:
+            backend_proc = subprocess.Popen(
+                ["npm", "start"],
+                cwd=str(backend_dir),
+                env=backend_env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
+            )
+        BACKEND_PID_FILE.write_text(str(backend_proc.pid))
     except Exception as e:
         click.echo(f"  Error starting server: {e}", err=True)
         return
 
-    time.sleep(3)
+    time.sleep(2)
 
-    click.echo(f"\nServer restarted on port {BACKEND_PORT}.")
-    click.echo(f"  Frontend: http://localhost:{BACKEND_PORT}")
-    click.echo(f"  API:      http://localhost:{BACKEND_PORT}/api")
+    if _is_port_in_use(BACKEND_PORT):
+        click.echo(f"\nServer restarted on port {BACKEND_PORT}!")
+        click.echo(f"  Frontend: http://localhost:{BACKEND_PORT}")
+        click.echo(f"  API:      http://localhost:{BACKEND_PORT}/api")
+        click.echo(f"  Logs:     {log_file}")
+    else:
+        click.echo(f"\nServer failed to start. Check logs at: {log_file}")
 
 
 @click.command("update")
@@ -744,7 +730,10 @@ def update() -> None:
     if _is_port_in_use(BACKEND_PORT):
         click.echo("Stopping server...")
         _kill_process_on_port(BACKEND_PORT)
-        _cleanup_processes()
+        BACKEND_PID_FILE.unlink()
+        log_file = BACKEND_PID_FILE.parent / "server.log"
+        if log_file.exists():
+            log_file.unlink()
         time.sleep(1)
     else:
         click.echo("No server running, proceeding with update...")
@@ -803,28 +792,31 @@ def update() -> None:
         click.echo("  Frontend directory not found", err=True)
 
     # Step 4: Restart server
+    log_file = BACKEND_PID_FILE.parent / "server.log"
     click.echo("\nStarting server...")
     try:
         backend_env = os.environ.copy()
-        backend_proc = subprocess.Popen(
-            ["npm", "start"],
-            cwd=str(BACKEND_DIR),
-            env=backend_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
-        )
-        _running_processes.append(backend_proc)
+        with open(log_file, "w") as log:
+            backend_proc = subprocess.Popen(
+                ["npm", "start"],
+                cwd=str(backend_dir),
+                env=backend_env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
+            )
+        BACKEND_PID_FILE.write_text(str(backend_proc.pid))
     except Exception as e:
         click.echo(f"  Error starting server: {e}", err=True)
         return
 
-    time.sleep(3)
+    time.sleep(2)
 
     click.echo("\n" + "="*50)
     click.echo("Update complete!")
     click.echo(f"  Frontend: http://localhost:{BACKEND_PORT}")
     click.echo(f"  API:      http://localhost:{BACKEND_PORT}/api")
+    click.echo(f"  Logs:     {log_file}")
 
 
 # Register subcommands
