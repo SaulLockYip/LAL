@@ -174,11 +174,21 @@ chatRouter.post('/:id/messages', async (req: Request, res: Response) => {
 // POST /api/chat/stream - Streaming chat with conversation ID
 chatRouter.post('/stream', async (req: Request, res: Response) => {
   try {
-    const { conversationId, message } = req.body;
+    const { conversationId, message, context } = req.body;
 
     if (!message) {
       res.status(400).json(errorResponse('VALIDATION_ERROR', 'message is required'));
       return;
+    }
+
+    // Build context system message if provided
+    let contextSystemMessage: string | null = null;
+    if (context && context.type === 'article' && context.articleContent) {
+      contextSystemMessage = `You are assisting with an article titled "${context.articleTitle || 'Untitled'}".\n\nArticle content:\n${context.articleContent}`;
+    } else if (context && context.type === 'word_list' && context.wordList && context.wordList.length > 0) {
+      contextSystemMessage = `You are assisting with vocabulary from a word list: ${context.wordList.join(', ')}`;
+    } else if (context && context.type === 'exercises') {
+      contextSystemMessage = 'You are assisting with language learning exercises.';
     }
 
     let effectiveConversationId = conversationId;
@@ -234,6 +244,12 @@ chatRouter.post('/stream', async (req: Request, res: Response) => {
       role: m.role as 'user' | 'assistant' | 'system',
       content: m.content,
     }));
+
+    // Inject context system message if provided
+    if (contextSystemMessage) {
+      chatMessages.push({ role: 'system', content: contextSystemMessage });
+    }
+
     chatMessages.push({ role: 'user', content: message });
 
     // Set up SSE for streaming response
