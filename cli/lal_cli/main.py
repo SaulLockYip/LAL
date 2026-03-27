@@ -515,23 +515,15 @@ def init(repo: str, target_dir: str | None, skip_clone: bool) -> None:
         click.echo("  Frontend directory not found", err=True)
         return
 
-    # Step 5: Create database and .env
-    click.echo("\n[5/6] Setting up database...")
-    db_dir = DB_PATH.parent
-    db_dir.mkdir(parents=True, exist_ok=True)
-    init_db()
-    click.echo(f"  Database directory: {db_dir}")
-    click.echo(f"  Database file: {DB_PATH}")
-    click.echo("  Database tables created successfully.")
-
-    # Step 6: Create .env file in backend if it doesn't exist
-    click.echo("\n[6/6] Setting up backend environment...")
+    # Step 5: Create .env file in backend if it doesn't exist
+    click.echo("\n[5/6] Setting up backend environment...")
     env_file = backend_dir / ".env"
+    db_path_for_prisma = install_dir / ".learn-any-language" / "database.sqlite"
     if env_file.exists():
         click.echo(f"  .env file already exists at: {env_file}")
     else:
         default_env_content = f"""# Database
-DATABASE_URL="file:{DB_PATH}"
+DATABASE_URL="file:{db_path_for_prisma}"
 
 # Server
 PORT={BACKEND_PORT}
@@ -541,6 +533,46 @@ PORT={BACKEND_PORT}
             click.echo(f"  Created .env file at: {env_file}")
         except Exception as e:
             click.echo(f"  Warning: Could not create .env file: {e}", err=True)
+
+    # Step 6: Setup Prisma database
+    click.echo("\n[6/6] Setting up Prisma database...")
+    db_dir = db_path_for_prisma.parent
+    db_dir.mkdir(parents=True, exist_ok=True)
+    # Remove old database if exists (to avoid schema conflicts)
+    if db_path_for_prisma.exists():
+        db_path_for_prisma.unlink()
+        click.echo(f"  Removed old database")
+    # Generate Prisma client
+    click.echo(f"  Generating Prisma client...")
+    try:
+        result = subprocess.run(
+            ["npx", "prisma", "generate"],
+            cwd=str(backend_dir),
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            click.echo(f"  Warning: prisma generate failed: {result.stderr}", err=True)
+        else:
+            click.echo(f"  Prisma client generated")
+    except Exception as e:
+        click.echo(f"  Warning: prisma generate failed: {e}", err=True)
+    # Push Prisma schema to database
+    click.echo(f"  Creating database schema at {db_path_for_prisma}...")
+    try:
+        result = subprocess.run(
+            ["npx", "prisma", "db", "push"],
+            cwd=str(backend_dir),
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            click.echo(f"  Error: prisma db push failed: {result.stderr}", err=True)
+            return
+        click.echo(f"  Database schema created successfully")
+    except Exception as e:
+        click.echo(f"  Error: prisma db push failed: {e}", err=True)
+        return
 
     click.echo("\n" + "="*50)
     click.echo("Initialization complete!")
