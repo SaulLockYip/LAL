@@ -129,6 +129,13 @@ export function ExercisesPage() {
     return 'text-red-600 dark:text-red-400';
   }
 
+  function getBandScoreColor(band: number | null) {
+    if (band === null) return 'text-gray-600 dark:text-gray-400';
+    if (band >= 7) return 'text-green-600 dark:text-green-400';
+    if (band >= 5) return 'text-yellow-600 dark:text-yellow-400';
+    return 'text-red-600 dark:text-red-400';
+  }
+
   // Group exercises by article
   function getGroupedExercises(): ArticleExerciseGroup[] {
     const groups: Map<string, ArticleExerciseGroup> = new Map();
@@ -355,22 +362,49 @@ export function ExercisesPage() {
                                 {getStatusBadge(exercise.status)}
                               </div>
                               <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
-                                {exercise.questionContent?.replace(/<!--BOX-->/g, '______') || 'No question content'}
+                                {(() => {
+                                  const qc = exercise.questionContent;
+                                  if (typeof qc === 'string') return qc.replace(/<!--BOX-->/g, '______');
+                                  if ('text' in qc && typeof qc.text === 'string') return qc.text;
+                                  return JSON.stringify(qc) || 'No question content';
+                                })()}
                               </p>
                               <div className="flex items-center gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
                                 <div className="flex items-center gap-1">
                                   <Calendar size={12} />
                                   {formatDate(exercise.createdAt)}
                                 </div>
+                                {/* Show exercise type badge */}
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                  exercise.type === 'choice' ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-600' :
+                                  exercise.type === 'fill_blank' ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600' :
+                                  exercise.type === 'open_ended' ? 'bg-green-100 dark:bg-green-900/50 text-green-600' :
+                                  exercise.type === 'translation' ? 'bg-orange-100 dark:bg-orange-900/50 text-orange-600' :
+                                  exercise.type === 'word_explanation' ? 'bg-pink-100 dark:bg-pink-900/50 text-pink-600' :
+                                  exercise.type === 'sentence_imitation' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600' :
+                                  'bg-gray-100 dark:bg-gray-700 text-gray-600'
+                                }`}>
+                                  {exercise.type.replace('_', ' ')}
+                                </span>
                                 {exercise.status === 'graded' && exercise.score !== null && (
                                   <span className={`font-medium ${getScoreColor(exercise.score)}`}>
                                     Score: {exercise.score}/100
                                   </span>
                                 )}
+                                {exercise.status === 'graded' && exercise.bandScore !== null && (
+                                  <span className={`font-medium ${getBandScoreColor(exercise.bandScore)}`}>
+                                    Band: {exercise.bandScore}/9
+                                  </span>
+                                )}
                               </div>
                             </div>
                             <div className="flex items-center gap-3">
-                              {exercise.status === 'graded' && exercise.score !== null && (
+                              {exercise.status === 'graded' && exercise.bandScore !== null && (
+                                <span className={`text-2xl font-bold ${getBandScoreColor(exercise.bandScore)}`}>
+                                  {exercise.bandScore}
+                                </span>
+                              )}
+                              {exercise.status === 'graded' && exercise.score !== null && exercise.bandScore === null && (
                                 <span className={`text-2xl font-bold ${getScoreColor(exercise.score)}`}>
                                   {exercise.score}
                                 </span>

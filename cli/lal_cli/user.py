@@ -32,7 +32,7 @@ def set_user_config(
             cursor.execute(
                 """
                 UPDATE user
-                SET name = ?, native_language = ?, target_language = ?, current_level = ?
+                SET name = ?, nativeLanguage = ?, targetLanguage = ?, currentLevel = ?
                 WHERE id = ?
                 """,
                 (name, native, target, current_level.upper(), existing["id"]),
@@ -40,7 +40,7 @@ def set_user_config(
         else:
             cursor.execute(
                 """
-                INSERT INTO user (name, native_language, target_language, current_level)
+                INSERT INTO user (name, nativeLanguage, targetLanguage, currentLevel)
                 VALUES (?, ?, ?, ?)
                 """,
                 (name, native, target, current_level.upper()),

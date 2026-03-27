@@ -46,14 +46,15 @@ def init_db() -> None:
     conn = get_connection()
     cursor = conn.cursor()
 
-    # User table
+    # User table (Prisma uses camelCase)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            native_language TEXT NOT NULL,
-            target_language TEXT NOT NULL,
-            current_level TEXT NOT NULL DEFAULT 'A1'
+            nativeLanguage TEXT NOT NULL,
+            targetLanguage TEXT NOT NULL,
+            currentLevel TEXT NOT NULL DEFAULT 'A1',
+            voice TEXT
         )
     """)
 
@@ -70,18 +71,18 @@ def init_db() -> None:
         )
     """)
 
-    # Articles table
+    # Articles table (Prisma uses camelCase)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS articles (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             content TEXT NOT NULL,
-            source TEXT,
-            notes TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            archived INTEGER DEFAULT 0,
-            level TEXT,
-            current_session_file_path TEXT
+            source TEXT NOT NULL,
+            notes TEXT NOT NULL,
+            createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            archived BOOLEAN NOT NULL DEFAULT false,
+            level TEXT NOT NULL,
+            currentSessionFilePath TEXT
         )
     """)
 

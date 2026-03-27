@@ -11,6 +11,7 @@ import click
 
 from lal_cli import articles as articles_lib
 from lal_cli import models as models_lib
+from lal_cli import settings as settings_lib
 from lal_cli import user as user_lib
 from lal_cli.database import DB_PATH, init_db
 
@@ -20,6 +21,7 @@ BACKEND_DIR = PROJECT_ROOT / "backend"
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 BACKEND_PORT = 18080
 FRONTEND_PORT = 5173
+BACKEND_PID_FILE = Path(os.path.expanduser("~/.learn-any-language/server.pid"))
 
 # Store running server processes
 _running_processes: List[subprocess.Popen] = []
@@ -30,8 +32,8 @@ _running_processes: List[subprocess.Popen] = []
 def cli() -> None:
     """LAL CLI - Learn Any Language CLI Tool.
 
-    A CLI tool for managing articles, word lists, exercises,
-    and AI model configuration for language learning.
+    A CLI tool for managing articles and AI model configuration
+    for language learning.
     """
     init_db()
 
@@ -163,9 +165,9 @@ def user_show() -> None:
 
     click.echo("Current User Settings:")
     click.echo(f"  Name:             {row['name']}")
-    click.echo(f"  Native Language:  {row['native_language']}")
-    click.echo(f"  Target Language: {row['target_language']}")
-    click.echo(f"  Current Level:   {row['current_level']}")
+    click.echo(f"  Native Language:  {row['nativeLanguage']}")
+    click.echo(f"  Target Language: {row['targetLanguage']}")
+    click.echo(f"  Current Level:   {row['currentLevel']}")
 
 
 # ============================================================================
@@ -241,6 +243,97 @@ def articles_delete(article_id: str) -> None:
         click.echo(f"Article '{title}' deleted successfully.")
     else:
         click.echo(f"Error: Article with ID '{article_id}' not found.", err=True)
+
+
+@articles.command("get")
+@click.argument("article_id")
+def articles_get(article_id: str) -> None:
+    """Get an article's content by ID."""
+    success, title, content = articles_lib.get_article_content(article_id)
+    if not success:
+        click.echo(f"Error: Article with ID '{article_id}' not found.", err=True)
+        return
+
+    click.echo(f"Title: {title}")
+    click.echo("-" * 50)
+    click.echo(content)
+
+
+# ============================================================================
+# Settings Commands
+# ============================================================================
+
+
+@click.group("settings")
+def settings() -> None:
+    """Manage settings."""
+    pass
+
+
+@settings.command("show")
+def settings_show() -> None:
+    """Show current user settings."""
+    settings_lib.show_user_settings()
+
+
+@settings.command("voices")
+def settings_voices() -> None:
+    """Show available macOS TTS voices."""
+    voices = settings_lib.get_voices()
+
+    if not voices:
+        click.echo("No voices found. Is the server running?")
+        return
+
+    click.echo(f"{'Name':<40} {'Language':<12} {'Display Name':<30}")
+    click.echo("-" * 82)
+    for voice in voices:
+        click.echo(f"{voice.get('name', ''):<40} {voice.get('lang', ''):<12} {voice.get('displayName', ''):<30}")
+
+
+@settings.command("tts-voices")
+@click.option("--language", default=None, help="Filter by language (e.g., chinese, english)")
+def settings_tts_voices(language: str | None) -> None:
+    """Show available MiniMax TTS voices."""
+    voices = settings_lib.get_tts_voices(language)
+
+    if not voices:
+        click.echo("No TTS voices found. Is the server running and TTS API configured?")
+        return
+
+    click.echo(f"{'Voice ID':<40} {'Voice Name':<30}")
+    click.echo("-" * 70)
+    for voice in voices:
+        click.echo(f"{voice.get('voice_id', ''):<40} {voice.get('voice_name', ''):<30}")
+        desc = voice.get("description", [])
+        if desc:
+            for d in desc:
+                click.echo(f"  - {d}")
+
+
+@settings.command("ai-test")
+@click.option("--provider", required=True, help="AI provider (openai or anthropic)")
+@click.option("--model-name", required=True, help="Model name (e.g., gpt-4, claude-3-5-sonnet)")
+@click.option("--base-url", required=True, help="Base URL for API")
+@click.option("--key", "api_key", required=True, help="API key")
+def settings_ai_test(
+    provider: str,
+    model_name: str,
+    base_url: str,
+    api_key: str,
+) -> None:
+    """Test AI connection."""
+    click.echo("Testing AI connection...")
+    result = settings_lib.test_ai_connection(provider, model_name, api_key, base_url)
+
+    if result is None:
+        click.echo("Failed to test AI connection. Is the server running?", err=True)
+        return
+
+    if result.get("success"):
+        click.echo(f"Success: {result.get('message', 'Connection successful!')}")
+    else:
+        click.echo(f"Failed: {result.get('message', 'Connection failed')}", err=True)
 
 
 # ============================================================================
@@ -474,6 +567,8 @@ def start() -> None:
     def signal_handler(sig, frame):
         click.echo("\nShutting down server...")
         _cleanup_processes()
+        if BACKEND_PID_FILE.exists():
+            BACKEND_PID_FILE.unlink()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -492,6 +587,8 @@ def start() -> None:
             preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
         )
         _running_processes.append(backend_proc)
+        BACKEND_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        BACKEND_PID_FILE.write_text(str(backend_proc.pid))
         click.echo(f"  Server starting (PID: {backend_proc.pid})...")
     except Exception as e:
         click.echo(f"  Error starting server: {e}", err=True)
@@ -527,13 +624,28 @@ def stop() -> None:
     """
     click.echo("Stopping server...")
 
-    backend_stopped = _kill_process_on_port(BACKEND_PORT)
+    # Try to kill by PID first if PID file exists
+    server_stopped = False
+    if BACKEND_PID_FILE.exists():
+        try:
+            pid = int(BACKEND_PID_FILE.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+            server_stopped = True
+            BACKEND_PID_FILE.unlink()
+        except (ValueError, ProcessLookupError, PermissionError):
+            BACKEND_PID_FILE.unlink()
+
+    # Also try port-based kill as fallback
+    if not server_stopped:
+        backend_stopped = _kill_process_on_port(BACKEND_PORT)
+    else:
+        backend_stopped = True
 
     # Also clean up any processes we started
     _cleanup_processes()
 
     if not backend_stopped:
-        click.echo("No server was running on port {BACKEND_PORT}.")
+        click.echo(f"No server was running on port {BACKEND_PORT}.")
         return
 
     click.echo(f"  Server on port {BACKEND_PORT} stopped.")
@@ -656,7 +768,7 @@ def update() -> None:
     else:
         click.echo("  Frontend directory not found", err=True)
 
-    # Step 5: Restart server
+    # Step 4: Restart server
     click.echo("\nStarting server...")
     try:
         backend_env = os.environ.copy()
@@ -685,6 +797,7 @@ def update() -> None:
 cli.add_command(models)
 cli.add_command(user)
 cli.add_command(articles)
+cli.add_command(settings)
 cli.add_command(init)
 cli.add_command(start)
 cli.add_command(stop)

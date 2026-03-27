@@ -105,3 +105,28 @@ def delete_article(article_id: str) -> Tuple[bool, str]:
         cursor.execute("DELETE FROM articles WHERE id = ?", (article_id,))
         conn.commit()
         return (True, row["title"])
+
+
+def get_article_content(article_id: str) -> Tuple[bool, str, str]:
+    """Get an article's content by ID.
+
+    Args:
+        article_id: Article ID
+
+    Returns:
+        Tuple of (success, title, decoded_content)
+    """
+    import click
+
+    row = get_article(article_id)
+    if not row:
+        return (False, "", "")
+
+    title = row["title"]
+    encoded_content = row["content"]
+    try:
+        decoded_content = base64.b64decode(encoded_content.encode()).decode()
+    except Exception as e:
+        raise click.ClickException(f"Failed to decode article content: {str(e)}")
+
+    return (True, title, decoded_content)
