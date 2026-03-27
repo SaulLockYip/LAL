@@ -63,6 +63,22 @@ function tokenizeLatin(text: string): string[] {
     .filter(word => word.length > 0);
 }
 
+// Intl.Segmenter type declaration for older TypeScript versions
+declare namespace Intl {
+  interface Segmenter {
+    segment(text: string): Iterable<{
+      segment: string;
+      index: number;
+      input: string;
+      isWord: boolean;
+    }>;
+  }
+  interface SegmenterConstructor {
+    new (locale: string, options?: { granularity?: 'word' | 'sentence' | 'grapheme' }): Segmenter;
+  }
+  const Segmenter: SegmenterConstructor;
+}
+
 // Tokenize CJK text using Intl.Segmenter
 function tokenizeCJK(text: string): string[] {
   // Intl.Segmenter is supported in modern browsers
@@ -71,8 +87,8 @@ function tokenizeCJK(text: string): string[] {
       const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
       const segments = [...segmenter.segment(text)];
       return segments
-        .filter(s => s.isWord && !/^\s+$/.test(s.value))
-        .map(s => s.value.trim())
+        .filter(s => s.isWord && !/^\s+$/.test(s.segment))
+        .map(s => s.segment.trim())
         .filter(w => w.length > 0);
     } catch {
       // Fallback to character-level if Intl.Segmenter fails
@@ -111,15 +127,11 @@ function groupByScript(text: string): TextSegment[] {
     if (script === currentScript) {
       currentText += char;
     } else {
-      if (currentText.length > 0) {
-        // Determine if mixed
-        const segmentScript: 'cjk' | 'latin' | 'mixed' =
-          currentScript === 'cjk' ? 'cjk' :
-          currentScript === 'latin' ? 'latin' : 'other';
-
-        if (segmentScript !== 'other') {
-          segments.push({ text: currentText, script: segmentScript });
-        }
+      if (currentText.length > 0 && currentScript !== 'other') {
+        segments.push({
+          text: currentText,
+          script: currentScript === 'cjk' ? 'cjk' : 'latin'
+        });
       }
       currentScript = script;
       currentText = char;
