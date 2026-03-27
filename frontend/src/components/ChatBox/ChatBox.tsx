@@ -5,7 +5,7 @@ import { ChatInput } from './ChatInput';
 import { ChatHistory } from './ChatHistory';
 import { ChatContextPicker, type ContextType } from './ChatContextPicker';
 import { ChatToastContainer, chatToast } from './ChatToast';
-import { streamChat } from '../../services/chatApi';
+import { streamChat, getConversation } from '../../services/chatApi';
 import type { ChatContext, Conversation } from '../../types/chat';
 
 interface ChatMessageData {
@@ -38,6 +38,7 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamedContent, setStreamedContent] = useState('');
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [contextType, setContextType] = useState<ContextType>(articleContext ? 'article' : 'global');
   const [showHistory, setShowHistory] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -171,6 +172,7 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
 
       // Use streaming - message will be added to messages only on complete
       await streamChat({
+        conversationId: currentConversationId || undefined,
         message: content.trim(),
         context,
         onChunk: (chunk) => {
@@ -218,17 +220,33 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
     setInput(content);
   };
 
-  const handleSelectConversation = (conversation: Conversation) => {
-    // For now, we'll just close the history panel and start fresh
-    // In a full implementation, you would load the conversation messages
+  const handleSelectConversation = async (conversation: Conversation) => {
     setShowHistory(false);
-    chatToast.info(`Conversation: ${conversation.title || 'Loaded'}`);
+    setCurrentConversationId(conversation.id);
+    try {
+      const { messages: loadedMessages } = await getConversation(conversation.id);
+      // Transform messages to ChatMessageData format, filtering out system messages
+      const transformedMessages: ChatMessageData[] = loadedMessages
+        .filter((msg) => msg.role === 'user' || msg.role === 'assistant')
+        .map((msg) => ({
+          id: msg.id,
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+          timestamp: new Date(msg.createdAt),
+        }));
+      setMessages(transformedMessages);
+      chatToast.success('Conversation loaded');
+    } catch (error) {
+      console.error('Failed to load conversation:', error);
+      chatToast.error('Failed to load conversation');
+    }
   };
 
   const handleNewChat = () => {
     setMessages([]);
     setInput('');
     lastUserMessageRef.current = '';
+    setCurrentConversationId(null);
     setShowHistory(false);
     chatToast.info('Started new chat');
   };
@@ -349,7 +367,7 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
             <div className={`w-72 h-full ${showHistory ? 'opacity-100' : 'opacity-0'}`}>
               <ChatHistory
                 onSelectConversation={handleSelectConversation}
-                currentConversationId={null}
+                currentConversationId={currentConversationId}
                 onNewChat={handleNewChat}
               />
             </div>
@@ -360,7 +378,7 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
             <div className="absolute inset-0 bg-white dark:bg-gray-900 z-10 w-full">
               <ChatHistory
                 onSelectConversation={handleSelectConversation}
-                currentConversationId={null}
+                currentConversationId={currentConversationId}
                 onNewChat={handleNewChat}
               />
             </div>
