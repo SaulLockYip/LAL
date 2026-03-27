@@ -169,17 +169,7 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
     try {
       const context = buildContext();
 
-      // Create assistant message placeholder
-      const assistantMessageId = crypto.randomUUID();
-      const assistantMessage: ChatMessageData = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-
-      // Use streaming
+      // Use streaming - message will be added to messages only on complete
       await streamChat({
         message: content.trim(),
         context,
@@ -188,14 +178,14 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
           setStreamedContent(streamedContentRef.current);
         },
         onComplete: (fullResponse) => {
-          // Finalize the message with full content
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMessageId
-                ? { ...msg, content: fullResponse }
-                : msg
-            )
-          );
+          // Add the complete message to messages
+          const assistantMessage: ChatMessageData = {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: fullResponse,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
           chatToast.success('Response complete');
         },
         onError: (error) => {
@@ -203,9 +193,6 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
         },
       });
     } catch (error) {
-      // Remove the placeholder message on error
-      setMessages((prev) => prev.slice(0, -1));
-
       const errorMessage: ChatMessageData = {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -215,6 +202,7 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, errorMessage]);
+      setStreamedContent('');
       chatToast.error('Failed to send message');
     } finally {
       setIsLoading(false);
