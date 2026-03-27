@@ -176,19 +176,27 @@ chatRouter.post('/stream', async (req: Request, res: Response) => {
   try {
     const { conversationId, message } = req.body;
 
-    if (!conversationId) {
-      res.status(400).json(errorResponse('VALIDATION_ERROR', 'conversationId is required'));
-      return;
-    }
-
     if (!message) {
       res.status(400).json(errorResponse('VALIDATION_ERROR', 'message is required'));
       return;
     }
 
+    let effectiveConversationId = conversationId;
+
+    // Create a new conversation if conversationId is not provided
+    if (!effectiveConversationId) {
+      const newConversation = await prisma.conversation.create({
+        data: {
+          title: message.substring(0, 50) + (message.length > 50 ? '...' : ''),
+          articleId: null,
+        },
+      });
+      effectiveConversationId = newConversation.id;
+    }
+
     // Get conversation
     const conversation = await prisma.conversation.findUnique({
-      where: { id: conversationId },
+      where: { id: effectiveConversationId },
       include: {
         messages: {
           orderBy: { createdAt: 'asc' },
@@ -214,7 +222,7 @@ chatRouter.post('/stream', async (req: Request, res: Response) => {
     // Save user message
     const userMsg = await prisma.message.create({
       data: {
-        conversationId,
+        conversationId: effectiveConversationId,
         role: 'user',
         content: message,
         model: null,
@@ -248,7 +256,7 @@ chatRouter.post('/stream', async (req: Request, res: Response) => {
     // Save assistant message
     const assistantMsg = await prisma.message.create({
       data: {
-        conversationId,
+        conversationId: effectiveConversationId,
         role: 'assistant',
         content: fullResponse,
         model: aiSetting.modelName,
@@ -257,7 +265,7 @@ chatRouter.post('/stream', async (req: Request, res: Response) => {
 
     // Update conversation's updatedAt
     await prisma.conversation.update({
-      where: { id: conversationId },
+      where: { id: effectiveConversationId },
       data: { updatedAt: new Date() },
     });
 
