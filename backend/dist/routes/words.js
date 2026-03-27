@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { prisma, lookupWord, getDerivationEtymology } from '../services/ai.js';
+import { prisma } from '../services/ai.js';
 export const wordsRouter = Router();
 // Helper function for response format
 function successResponse(data) {
@@ -63,7 +63,7 @@ wordsRouter.get('/', async (req, res) => {
 // POST /api/words - Create word from lookup
 wordsRouter.post('/', async (req, res) => {
     try {
-        const { articleId, word, contextParagraph, fetchDerivation } = req.body;
+        const { articleId, word, partOfSpeech, phonetic, definition, translation, exampleSentence, field, inflections, synonyms, phrases, derivation, etymology, } = req.body;
         if (!articleId || !word) {
             res.status(400).json(errorResponse('VALIDATION_ERROR', 'articleId and word are required'));
             return;
@@ -76,59 +76,37 @@ wordsRouter.post('/', async (req, res) => {
             res.status(404).json(errorResponse('NOT_FOUND', 'Article not found'));
             return;
         }
-        // Perform word lookup
-        const lookupResult = await lookupWord(word, contextParagraph || '');
         // Prepare JSON fields
-        const inflectionsJson = JSON.stringify(lookupResult.inflections || {});
-        const synonymsJson = JSON.stringify(lookupResult.synonyms || []);
-        const phrasesJson = JSON.stringify(lookupResult.phrases || []);
-        // Create word record
+        const inflectionsJson = JSON.stringify(inflections || {});
+        const synonymsJson = JSON.stringify(synonyms || []);
+        const phrasesJson = JSON.stringify(phrases || []);
+        const derivationJson = derivation ? JSON.stringify(derivation) : null;
+        const etymologyJson = etymology ? JSON.stringify(etymology) : null;
+        // Create word record directly with provided data
         const newWord = await prisma.wordList.create({
             data: {
                 articleId,
-                word: lookupResult.word,
-                partOfSpeech: lookupResult.partOfSpeech,
-                phonetic: lookupResult.phonetic,
-                definition: lookupResult.definition,
-                translation: lookupResult.translation,
-                exampleSentence: lookupResult.exampleSentence,
-                field: lookupResult.field,
+                word,
+                partOfSpeech: partOfSpeech || null,
+                phonetic: phonetic || null,
+                definition: definition || null,
+                translation: translation || null,
+                exampleSentence: exampleSentence || null,
+                field: field || null,
                 inflections: inflectionsJson,
                 synonyms: synonymsJson,
                 phrases: phrasesJson,
+                derivation: derivationJson,
+                etymology: etymologyJson,
             },
         });
-        // Optionally fetch derivation/etymology
-        if (fetchDerivation) {
-            try {
-                const derivationResult = await getDerivationEtymology(word);
-                const updatedWord = await prisma.wordList.update({
-                    where: { id: newWord.id },
-                    data: {
-                        derivation: JSON.stringify(derivationResult.derivation),
-                        etymology: JSON.stringify(derivationResult.etymology),
-                    },
-                });
-                res.json(successResponse({
-                    ...updatedWord,
-                    inflections: lookupResult.inflections || {},
-                    synonyms: lookupResult.synonyms || [],
-                    phrases: lookupResult.phrases || [],
-                    derivation: derivationResult.derivation,
-                    etymology: derivationResult.etymology,
-                }));
-                return;
-            }
-            catch (derivationError) {
-                console.error('Error fetching derivation:', derivationError);
-                // Continue without derivation
-            }
-        }
         res.json(successResponse({
             ...newWord,
-            inflections: lookupResult.inflections || {},
-            synonyms: lookupResult.synonyms || [],
-            phrases: lookupResult.phrases || [],
+            inflections: inflections || {},
+            synonyms: synonyms || [],
+            phrases: phrases || [],
+            derivation: derivation || null,
+            etymology: etymology || null,
         }));
         return;
     }
@@ -226,6 +204,48 @@ wordsRouter.post('/lookup', async (req, res) => {
     catch (error) {
         console.error('Error looking up word:', error);
         const message = error instanceof Error ? error.message : 'Failed to lookup word';
+        res.status(500).json(errorResponse('AI_ERROR', message));
+        return;
+    }
+});
+// POST /api/words/derivation - Get word derivation/etymology
+wordsRouter.post('/derivation', async (req, res) => {
+    try {
+        const { word } = req.body;
+        if (!word) {
+            res.status(400).json(errorResponse('VALIDATION_ERROR', 'word is required'));
+            return;
+        }
+        // Import the AI functions dynamically to avoid circular dependencies
+        const { getDerivationEtymology } = await import('../services/ai.js');
+        const result = await getDerivationEtymology(word);
+        res.json(successResponse(result));
+        return;
+    }
+    catch (error) {
+        console.error('Error getting derivation:', error);
+        const message = error instanceof Error ? error.message : 'Failed to get derivation';
+        res.status(500).json(errorResponse('AI_ERROR', message));
+        return;
+    }
+});
+// POST /api/words/etymology - Get word etymology (same endpoint, returns same data)
+wordsRouter.post('/etymology', async (req, res) => {
+    try {
+        const { word } = req.body;
+        if (!word) {
+            res.status(400).json(errorResponse('VALIDATION_ERROR', 'word is required'));
+            return;
+        }
+        // Import the AI functions dynamically to avoid circular dependencies
+        const { getDerivationEtymology } = await import('../services/ai.js');
+        const result = await getDerivationEtymology(word);
+        res.json(successResponse(result));
+        return;
+    }
+    catch (error) {
+        console.error('Error getting etymology:', error);
+        const message = error instanceof Error ? error.message : 'Failed to get etymology';
         res.status(500).json(errorResponse('AI_ERROR', message));
         return;
     }

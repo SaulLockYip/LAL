@@ -82,7 +82,17 @@ chatRouter.get('/:id', async (req: Request, res: Response) => {
       return;
     }
 
-    res.json(successResponse(conversation));
+    // Return conversation and messages as separate top-level properties
+    res.json(successResponse({
+      conversation: {
+        id: conversation.id,
+        title: conversation.title,
+        articleId: conversation.articleId,
+        createdAt: conversation.createdAt,
+        updatedAt: conversation.updatedAt,
+      },
+      messages: conversation.messages,
+    }));
     return;
   } catch (error) {
     console.error('Error getting conversation:', error);

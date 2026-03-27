@@ -385,7 +385,7 @@ settingsRouter.get('/tts-voices', async (req: Request, res: Response) => {
       return;
     }
 
-    const data = await response.json();
+    const data = await response.json() as { system_voice?: Array<{ voice_id?: string; voice_name?: string; description?: string[] }> };
     let voices = data.system_voice || [];
 
     // Filter by language if provided
@@ -399,9 +399,9 @@ settingsRouter.get('/tts-voices', async (req: Request, res: Response) => {
     }
 
     // Return filtered voice list with required fields
-    const filteredVoices = voices.map((voice: { voice_id: string; voice_name: string; description?: string[] }) => ({
-      voice_id: voice.voice_id,
-      voice_name: voice.voice_name,
+    const filteredVoices = voices.map((voice) => ({
+      voice_id: voice.voice_id || '',
+      voice_name: voice.voice_name || '',
       description: voice.description || [],
     }));
 
