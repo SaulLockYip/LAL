@@ -62,12 +62,12 @@ export function ChatHistory({
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-white dark:bg-gray-900">
       {/* Header */}
-      <div className="p-3 border-b border-gray-200 dark:border-gray-700">
+      <div className="p-4 border-b border-gray-100 dark:border-gray-800">
         <button
           onClick={onNewChat}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl transition-colors font-medium"
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-xl transition-all font-medium shadow-md hover:shadow-lg"
         >
           <Plus size={18} />
           New Chat
@@ -77,14 +77,16 @@ export function ChatHistory({
       {/* Conversation List */}
       <div className="flex-1 overflow-y-auto">
         {isLoading && conversations.length === 0 ? (
-          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-            <MessageCircle size={32} className="mx-auto mb-2 opacity-50" />
+          <div className="p-6 text-center text-gray-500 dark:text-gray-400">
+            <MessageCircle size={32} className="mx-auto mb-3 opacity-50" />
             <p className="text-sm">Loading conversations...</p>
           </div>
         ) : conversations.length === 0 ? (
-          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-            <MessageCircle size={32} className="mx-auto mb-2 opacity-50" />
-            <p className="text-sm">No conversations yet</p>
+          <div className="p-6 text-center text-gray-500 dark:text-gray-400">
+            <div className="w-16 h-16 rounded-2xl bg-gray-100 dark:bg-gray-800 mx-auto mb-3 flex items-center justify-center">
+              <MessageCircle size={28} className="opacity-50" />
+            </div>
+            <p className="text-sm font-medium">No conversations yet</p>
             <p className="text-xs mt-1">Start a new chat to begin</p>
           </div>
         ) : (
@@ -93,10 +95,10 @@ export function ChatHistory({
               <button
                 key={conversation.id}
                 onClick={() => onSelectConversation(conversation)}
-                className={`w-full flex items-center justify-between p-3 rounded-xl transition-colors text-left group ${
+                className={`w-full flex items-center justify-between p-3 rounded-xl transition-all text-left group ${
                   currentConversationId === conversation.id
                     ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                    : 'hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
+                    : 'hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
                 }`}
               >
                 <div className="flex-1 min-w-0">

@@ -256,20 +256,41 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
       {/* Floating Action Button */}
       <button
         onClick={() => setIsOpen(true)}
-        className={`fixed z-50 bg-blue-500 hover:bg-blue-600 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-200 ${
+        className={`fixed z-50 group ${
           isMobile
-            ? 'bottom-4 right-4 p-3'
+            ? 'bottom-4 right-4 p-3.5'
             : 'bottom-6 right-6 p-4'
         }`}
         aria-label="Open chat"
       >
-        <MessageCircle size={isMobile ? 22 : 24} />
+        <div className="relative">
+          {/* Glow effect */}
+          <div className={`absolute -inset-1 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full blur opacity-30 group-hover:opacity-50 transition-opacity duration-300 ${isOpen ? 'hidden' : ''}`} />
+          {/* Button */}
+          <div className={`relative flex items-center justify-center rounded-full shadow-lg hover:shadow-xl transition-all duration-200 ${
+            isOpen
+              ? 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
+              : 'bg-gradient-to-br from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white'
+          }`}>
+            {isOpen ? (
+              <X size={isMobile ? 22 : 24} />
+            ) : (
+              <>
+                <MessageCircle size={isMobile ? 22 : 24} />
+                {/* Notification dot */}
+                {messages.length > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900" />
+                )}
+              </>
+            )}
+          </div>
+        </div>
       </button>
 
       {/* Backdrop (mobile) */}
       {isOpen && isMobile && (
         <div
-          className="fixed inset-0 bg-black/50 z-40"
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
           onClick={() => setIsOpen(false)}
         />
       )}
@@ -277,26 +298,34 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
       {/* Chat Panel */}
       <div
         ref={panelRef}
-        className={`fixed top-0 h-full bg-white dark:bg-gray-900 shadow-2xl z-50 transform transition-all duration-300 ease-out flex flex-col ${
-          isMobile ? 'w-full' : 'w-96'
+        className={`fixed top-0 h-full bg-white dark:bg-gray-900 z-50 transform transition-all duration-300 ease-out flex flex-col border-l border-gray-200 dark:border-gray-700 ${
+          isMobile ? 'w-full' : 'w-[420px]'
         } ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
+        style={{
+          boxShadow: isOpen ? '-8px 0 40px rgba(0, 0, 0, 0.15)' : 'none',
+        }}
         role="dialog"
         aria-label="AI Assistant Chat"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800 bg-gradient-to-r from-white dark:from-gray-900 to-gray-50 dark:to-gray-850">
+          <div className="flex items-center gap-3">
             <button
               onClick={() => setShowHistory(!showHistory)}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors md:hidden"
+              className="p-2 -ml-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors"
               aria-label="Toggle history"
             >
               {showHistory ? <PanelLeftClose size={20} /> : <PanelLeft size={20} />}
             </button>
-            <Bot className="text-blue-500" size={24} />
-            <h2 className="font-semibold text-lg">AI Assistant</h2>
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shadow-md">
+              <Bot size={20} className="text-white" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-gray-900 dark:text-white">AI Assistant</h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Powered by LLM</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <ChatContextPicker
@@ -306,7 +335,7 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
             />
             <button
               onClick={() => setIsOpen(false)}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors"
               aria-label="Close chat"
             >
               <X size={20} />
@@ -315,12 +344,12 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
         </div>
 
         {/* Main content area */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* History Sidebar (desktop always visible on md+, mobile toggle) */}
+        <div className="flex-1 flex overflow-hidden bg-gray-50 dark:bg-gray-900">
+          {/* History Sidebar (desktop) */}
           <div
             className={`${
               showHistory ? 'w-72' : 'w-0'
-            } transition-all duration-300 overflow-hidden flex-shrink-0 border-r border-gray-200 dark:border-gray-700 hidden md:block`}
+            } transition-all duration-300 overflow-hidden flex-shrink-0 border-r border-gray-200 dark:border-gray-700 hidden md:block bg-white dark:bg-gray-900`}
           >
             <div className={`w-72 h-full ${showHistory ? 'opacity-100' : 'opacity-0'}`}>
               <ChatHistory
@@ -347,19 +376,26 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
             {/* Messages */}
             <div
               ref={messagesContainerRef}
-              className="flex-1 overflow-y-auto p-4 space-y-4"
+              className="flex-1 overflow-y-auto p-5 space-y-5 scroll-smooth"
+              style={{
+                background: 'linear-gradient(180deg, transparent 0%, rgba(255,255,255,0) 100%), radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.03) 0%, transparent 50%)',
+              }}
             >
               {messages.length === 0 && (
-                <div className="text-center text-gray-500 dark:text-gray-400 py-12">
-                  <Bot size={48} className="mx-auto mb-4 opacity-50" />
-                  <p className="font-medium">Start a conversation</p>
-                  <p className="text-sm mt-2">
+                <div className="flex flex-col items-center justify-center h-full text-center px-4">
+                  <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-blue-100 to-purple-100 dark:from-blue-900/30 dark:to-purple-900/30 flex items-center justify-center mb-5">
+                    <Bot size={36} className="text-blue-500 opacity-60" />
+                  </div>
+                  <p className="font-semibold text-gray-700 dark:text-gray-200 text-lg">Start a conversation</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-2 max-w-xs">
                     Ask me anything about language learning, articles, or vocabulary.
                   </p>
                   {contextType !== 'global' && (
-                    <p className="text-xs mt-4 text-blue-500">
-                      Context: {contextType === 'article' ? 'Article' : contextType === 'word_list' ? 'Word List' : 'Exercises'}
-                    </p>
+                    <div className="mt-4 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 rounded-full">
+                      <p className="text-xs text-blue-600 dark:text-blue-400 font-medium">
+                        Context: {contextType === 'article' ? 'Article' : contextType === 'word_list' ? 'Word List' : 'Exercises'}
+                      </p>
+                    </div>
                   )}
                 </div>
               )}
@@ -375,13 +411,13 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
 
               {/* Streaming indicator */}
               {isLoading && streamedContent && (
-                <div className="flex gap-3">
-                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center">
-                    <Bot size={18} className="text-blue-500" />
+                <div className="flex gap-3 animate-in fade-in slide-in-from-bottom-1 duration-200">
+                  <div className="flex-shrink-0 w-9 h-9 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center shadow-sm">
+                    <Bot size={18} className="text-white" />
                   </div>
-                  <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tl-none px-4 py-3 max-w-[80%]">
+                  <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl rounded-tl-md px-4 py-3 max-w-[85%] shadow-sm">
                     <div className="prose prose-sm dark:prose-invert max-w-none">
-                      <p className="whitespace-pre-wrap">{streamedContent}</p>
+                      <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-gray-700 dark:text-gray-200">{streamedContent}</p>
                       <span className="inline-block animate-pulse">▊</span>
                     </div>
                   </div>
@@ -390,10 +426,10 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
 
               {isLoading && !streamedContent && (
                 <div className="flex gap-3">
-                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center">
-                    <Bot size={18} className="text-blue-500" />
+                  <div className="flex-shrink-0 w-9 h-9 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center shadow-sm">
+                    <Bot size={18} className="text-white" />
                   </div>
-                  <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tl-none px-4 py-3">
+                  <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm">
                     <Loader2 className="animate-spin text-blue-500" size={20} />
                   </div>
                 </div>
@@ -403,36 +439,38 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
             </div>
 
             {/* Input */}
-            <ChatInput
-              value={input}
-              onChange={setInput}
-              onSend={handleSend}
-              onEditLastMessage={handleEditLastMessage}
-              disabled={isLoading}
-              placeholder={
-                contextType === 'article'
-                  ? 'Ask about the article...'
-                  : contextType === 'word_list'
-                  ? 'Ask about vocabulary...'
-                  : contextType === 'exercises'
-                  ? 'Ask about exercises...'
-                  : 'Ask about language learning...'
-              }
-              lastUserMessage={lastUserMessageRef.current}
-            />
+            <div className="bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800">
+              <ChatInput
+                value={input}
+                onChange={setInput}
+                onSend={handleSend}
+                onEditLastMessage={handleEditLastMessage}
+                disabled={isLoading}
+                placeholder={
+                  contextType === 'article'
+                    ? 'Ask about the article...'
+                    : contextType === 'word_list'
+                    ? 'Ask about vocabulary...'
+                    : contextType === 'exercises'
+                    ? 'Ask about exercises...'
+                    : 'Ask about language learning...'
+                }
+                lastUserMessage={lastUserMessageRef.current}
+              />
 
-            {/* Keyboard shortcuts hint */}
-            <div className="px-4 pb-2 text-xs text-gray-400 dark:text-gray-500 flex items-center justify-between">
-              <span className="hidden sm:inline">
-                <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs">Ctrl</kbd>
-                {' + '}
-                <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs">Enter</kbd>
-                {' to send'}
-              </span>
-              <span>
-                <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs">↑</kbd>
-                {' to edit'}
-              </span>
+              {/* Keyboard shortcuts hint */}
+              <div className="px-5 pb-3 text-xs text-gray-400 dark:text-gray-500 flex items-center justify-between">
+                <span className="hidden sm:inline">
+                  <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs border border-gray-200 dark:border-gray-700">Ctrl</kbd>
+                  {' + '}
+                  <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs border border-gray-200 dark:border-gray-700">Enter</kbd>
+                  {' to send'}
+                </span>
+                <span>
+                  <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-xs border border-gray-200 dark:border-gray-700">↑</kbd>
+                  {' to edit last'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
