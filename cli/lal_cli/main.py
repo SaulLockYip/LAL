@@ -16,12 +16,32 @@ from lal_cli import user as user_lib
 from lal_cli.database import DB_PATH, init_db
 
 # Project root directory (parent of cli directory)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-BACKEND_DIR = PROJECT_ROOT / "backend"
-FRONTEND_DIR = PROJECT_ROOT / "frontend"
+CLI_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_PROJECT_ROOT = Path.home() / "LAL"
 BACKEND_PORT = 18080
 FRONTEND_PORT = 5173
 BACKEND_PID_FILE = Path(os.path.expanduser("~/.learn-any-language/server.pid"))
+
+
+def _get_project_root() -> Path:
+    """Get the project root directory.
+
+    Returns ~/LAL if it exists and is a valid project,
+    otherwise falls back to CLI_ROOT (for development).
+    """
+    if DEFAULT_PROJECT_ROOT.exists() and (DEFAULT_PROJECT_ROOT / "backend").exists():
+        return DEFAULT_PROJECT_ROOT
+    return CLI_ROOT
+
+
+def _get_backend_dir() -> Path:
+    """Get the backend directory."""
+    return _get_project_root() / "backend"
+
+
+def _get_frontend_dir() -> Path:
+    """Get the frontend directory."""
+    return _get_project_root() / "frontend"
 
 # Store running server processes
 _running_processes: List[subprocess.Popen] = []
@@ -425,7 +445,7 @@ def init(repo: str, target_dir: str | None, skip_clone: bool) -> None:
     if target_dir:
         install_dir = Path(target_dir).expanduser().resolve()
     else:
-        install_dir = Path.home() / "LAL"
+        install_dir = DEFAULT_PROJECT_ROOT
 
     # Step 1: Clone repo if needed
     click.echo("\n[1/6] Setting up project directory...")
@@ -446,17 +466,15 @@ def init(repo: str, target_dir: str | None, skip_clone: bool) -> None:
     else:
         click.echo(f"  Empty directory, skipping clone: {install_dir}")
 
-    # Update PROJECT_ROOT, BACKEND_DIR, FRONTEND_DIR to use install_dir
-    global PROJECT_ROOT, BACKEND_DIR, FRONTEND_DIR
-    PROJECT_ROOT = install_dir
-    BACKEND_DIR = install_dir / "backend"
-    FRONTEND_DIR = install_dir / "frontend"
+    # Use install_dir as project root
+    backend_dir = install_dir / "backend"
+    frontend_dir = install_dir / "frontend"
 
     # Step 2: Install backend dependencies
     click.echo("\n[2/6] Installing backend dependencies...")
-    if BACKEND_DIR.exists():
+    if backend_dir.exists():
         try:
-            subprocess.run(["npm", "install"], cwd=str(BACKEND_DIR), check=True, capture_output=True)
+            subprocess.run(["npm", "install"], cwd=str(backend_dir), check=True)
             click.echo("  Backend dependencies installed")
         except subprocess.CalledProcessError as e:
             click.echo(f"  Error installing backend dependencies: {e.stderr.decode() if e.stderr else str(e)}", err=True)
@@ -470,9 +488,9 @@ def init(repo: str, target_dir: str | None, skip_clone: bool) -> None:
 
     # Step 3: Install frontend dependencies
     click.echo("\n[3/6] Installing frontend dependencies...")
-    if FRONTEND_DIR.exists():
+    if frontend_dir.exists():
         try:
-            subprocess.run(["npm", "install"], cwd=str(FRONTEND_DIR), check=True, capture_output=True)
+            subprocess.run(["npm", "install"], cwd=str(frontend_dir), check=True)
             click.echo("  Frontend dependencies installed")
         except subprocess.CalledProcessError as e:
             click.echo(f"  Error installing frontend dependencies: {e.stderr.decode() if e.stderr else str(e)}", err=True)
@@ -483,13 +501,20 @@ def init(repo: str, target_dir: str | None, skip_clone: bool) -> None:
 
     # Step 4: Build frontend static files
     click.echo("\n[4/6] Building frontend...")
-    if FRONTEND_DIR.exists():
-        try:
-            subprocess.run(["npm", "run", "build"], cwd=str(FRONTEND_DIR), check=True, capture_output=True)
-            click.echo("  Frontend built successfully")
-        except subprocess.CalledProcessError as e:
-            click.echo(f"  Error building frontend: {e.stderr.decode() if e.stderr else str(e)}", err=True)
+    if frontend_dir.exists():
+        click.echo("  Running npm run build...")
+        result = subprocess.run(
+            ["npm", "run", "build"],
+            cwd=str(frontend_dir),
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            click.echo(f"  Error building frontend:", err=True)
+            click.echo(result.stdout, err=True)
+            click.echo(result.stderr, err=True)
             return
+        click.echo("  Frontend built successfully")
     else:
         click.echo("  Frontend directory not found", err=True)
         return
@@ -505,7 +530,7 @@ def init(repo: str, target_dir: str | None, skip_clone: bool) -> None:
 
     # Step 6: Create .env file in backend if it doesn't exist
     click.echo("\n[6/6] Setting up backend environment...")
-    env_file = BACKEND_DIR / ".env"
+    env_file = backend_dir / ".env"
     if env_file.exists():
         click.echo(f"  .env file already exists at: {env_file}")
     else:
@@ -542,6 +567,9 @@ def start() -> None:
     """
     global _running_processes
 
+    backend_dir = _get_backend_dir()
+    frontend_dir = _get_frontend_dir()
+
     # Check if server is already running
     if _is_port_in_use(BACKEND_PORT):
         click.echo(f"Error: Server is already running on port {BACKEND_PORT}.", err=True)
@@ -549,16 +577,16 @@ def start() -> None:
         return
 
     # Check that backend directory exists
-    if not BACKEND_DIR.exists():
-        click.echo(f"Error: Backend directory not found at: {BACKEND_DIR}", err=True)
+    if not backend_dir.exists():
+        click.echo(f"Error: Backend directory not found at: {backend_dir}", err=True)
         click.echo("Run 'lal-cli init' first to initialize the project.", err=True)
         return
 
     # Check if frontend dist exists (from build step)
-    dist_path = FRONTEND_DIR / "dist"
+    dist_path = frontend_dir / "dist"
     if not dist_path.exists():
         click.echo(f"Warning: Frontend has not been built (dist folder not found).", err=True)
-        click.echo(f"Run 'npm run build' in {FRONTEND_DIR} first, or run 'lal-cli init' to set up.", err=True)
+        click.echo(f"Run 'npm run build' in {frontend_dir} first, or run 'lal-cli init' to set up.", err=True)
         click.echo("Starting server anyway - API will work but frontend will not be available.", err=True)
 
     click.echo("Starting server...")
@@ -580,7 +608,7 @@ def start() -> None:
         backend_env = os.environ.copy()
         backend_proc = subprocess.Popen(
             ["npm", "start"],
-            cwd=str(BACKEND_DIR),
+            cwd=str(backend_dir),
             env=backend_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -660,6 +688,8 @@ def restart() -> None:
     """
     global _running_processes
 
+    backend_dir = _get_backend_dir()
+
     # Stop any running server
     if _is_port_in_use(BACKEND_PORT):
         click.echo("Stopping server...")
@@ -670,8 +700,8 @@ def restart() -> None:
         click.echo("No server was running.")
 
     # Check that backend directory exists
-    if not BACKEND_DIR.exists():
-        click.echo(f"Error: Backend directory not found at: {BACKEND_DIR}", err=True)
+    if not backend_dir.exists():
+        click.echo(f"Error: Backend directory not found at: {backend_dir}", err=True)
         return
 
     # Start server
@@ -680,7 +710,7 @@ def restart() -> None:
         backend_env = os.environ.copy()
         backend_proc = subprocess.Popen(
             ["npm", "start"],
-            cwd=str(BACKEND_DIR),
+            cwd=str(backend_dir),
             env=backend_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -706,6 +736,10 @@ def update() -> None:
     Pulls latest code from git, reinstalls dependencies, rebuilds frontend,
     and restarts the server.
     """
+    project_root = _get_project_root()
+    backend_dir = _get_backend_dir()
+    frontend_dir = _get_frontend_dir()
+
     # Stop server if running
     if _is_port_in_use(BACKEND_PORT):
         click.echo("Stopping server...")
@@ -716,8 +750,8 @@ def update() -> None:
         click.echo("No server running, proceeding with update...")
 
     # Check that project directory exists
-    if not PROJECT_ROOT.exists():
-        click.echo(f"Error: Project directory not found at: {PROJECT_ROOT}", err=True)
+    if not project_root.exists():
+        click.echo(f"Error: Project directory not found at: {project_root}", err=True)
         click.echo("Run 'lal-cli init' first to set up the project.", err=True)
         return
 
@@ -728,7 +762,7 @@ def update() -> None:
     try:
         result = subprocess.run(
             ["git", "pull", "origin", "main"],
-            cwd=str(PROJECT_ROOT),
+            cwd=str(project_root),
             capture_output=True,
             text=True
         )
@@ -741,9 +775,9 @@ def update() -> None:
 
     # Step 2: npm install (backend)
     click.echo("\n[2/4] Updating backend dependencies...")
-    if BACKEND_DIR.exists():
+    if backend_dir.exists():
         try:
-            subprocess.run(["npm", "install"], cwd=str(BACKEND_DIR), check=True, capture_output=True)
+            subprocess.run(["npm", "install"], cwd=str(backend_dir), check=True, capture_output=True)
             click.echo("  Backend dependencies updated")
         except subprocess.CalledProcessError as e:
             click.echo(f"  Warning: npm install failed: {e}", err=True)
@@ -752,16 +786,16 @@ def update() -> None:
 
     # Step 3: npm install + build (frontend)
     click.echo("\n[3/4] Updating frontend dependencies...")
-    if FRONTEND_DIR.exists():
+    if frontend_dir.exists():
         try:
-            subprocess.run(["npm", "install"], cwd=str(FRONTEND_DIR), check=True, capture_output=True)
+            subprocess.run(["npm", "install"], cwd=str(frontend_dir), check=True, capture_output=True)
             click.echo("  Frontend dependencies updated")
         except subprocess.CalledProcessError as e:
             click.echo(f"  Warning: npm install failed: {e}", err=True)
 
         click.echo("\n[4/4] Rebuilding frontend...")
         try:
-            subprocess.run(["npm", "run", "build"], cwd=str(FRONTEND_DIR), check=True, capture_output=True)
+            subprocess.run(["npm", "run", "build"], cwd=str(frontend_dir), check=True, capture_output=True)
             click.echo("  Frontend rebuilt")
         except subprocess.CalledProcessError as e:
             click.echo(f"  Warning: npm build failed: {e}", err=True)
