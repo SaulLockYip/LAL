@@ -1123,6 +1123,7 @@ export function ArticleDetailPage() {
             {rightPanelTab === 'chat' && (
               <div className="relative h-full flex flex-col">
                 <ChatBox
+                  inline={true}
                   userInfo={userInfo ? {
                     targetLanguage: userInfo.targetLanguage,
                     nativeLanguage: userInfo.nativeLanguage,

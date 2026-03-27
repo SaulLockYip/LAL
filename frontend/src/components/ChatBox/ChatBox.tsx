@@ -16,6 +16,7 @@ interface ChatMessageData {
 }
 
 interface ChatBoxProps {
+  inline?: boolean;
   userInfo?: {
     targetLanguage: string;
     nativeLanguage: string;
@@ -31,8 +32,8 @@ interface ChatBoxProps {
   };
 }
 
-export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxProps) {
-  const [isOpen, setIsOpen] = useState(false);
+export function ChatBox({ inline = false, userInfo, articleContext, wordListContext }: ChatBoxProps) {
+  const [isOpen, setIsOpen] = useState(!inline);
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -90,8 +91,9 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
     return () => container.removeEventListener('scroll', handleScroll);
   }, [checkIfAtBottom]);
 
-  // Keyboard shortcuts - Escape to close
+  // Keyboard shortcuts - Escape to close (only when not inline)
   useEffect(() => {
+    if (inline) return;
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
         setIsOpen(false);
@@ -99,10 +101,11 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen]);
+  }, [isOpen, inline]);
 
-  // Prevent body scroll when panel is open
+  // Prevent body scroll when panel is open (only when not inline)
   useEffect(() => {
+    if (inline) return;
     if (isOpen) {
       document.body.style.overflow = 'hidden';
     } else {
@@ -111,7 +114,7 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
     return () => {
       document.body.style.overflow = '';
     };
-  }, [isOpen]);
+  }, [isOpen, inline]);
 
   const buildContext = (): ChatContext => {
     const context: ChatContext = {
@@ -253,42 +256,44 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
     <>
       <ChatToastContainer />
 
-      {/* Floating Action Button */}
-      <button
-        onClick={() => setIsOpen(true)}
-        className={`fixed z-50 group ${
-          isMobile
-            ? 'bottom-4 right-4 p-3.5'
-            : 'bottom-6 right-6 p-4'
-        }`}
-        aria-label="Open chat"
-      >
-        <div className="relative">
-          {/* Glow effect */}
-          <div className={`absolute -inset-1 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full blur opacity-30 group-hover:opacity-50 transition-opacity duration-300 ${isOpen ? 'hidden' : ''}`} />
-          {/* Button */}
-          <div className={`relative flex items-center justify-center rounded-full shadow-lg hover:shadow-xl transition-all duration-200 ${
-            isOpen
-              ? 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
-              : 'bg-gradient-to-br from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white'
-          }`}>
-            {isOpen ? (
-              <X size={isMobile ? 22 : 24} />
-            ) : (
-              <>
-                <MessageCircle size={isMobile ? 22 : 24} />
-                {/* Notification dot */}
-                {messages.length > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900" />
-                )}
-              </>
-            )}
+      {/* Floating Action Button - hidden when inline */}
+      {!inline && (
+        <button
+          onClick={() => setIsOpen(true)}
+          className={`fixed z-50 group ${
+            isMobile
+              ? 'bottom-4 right-4 p-3.5'
+              : 'bottom-6 right-6 p-4'
+          }`}
+          aria-label="Open chat"
+        >
+          <div className="relative">
+            {/* Glow effect */}
+            <div className={`absolute -inset-1 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full blur opacity-30 group-hover:opacity-50 transition-opacity duration-300 ${isOpen ? 'hidden' : ''}`} />
+            {/* Button */}
+            <div className={`relative flex items-center justify-center rounded-full shadow-lg hover:shadow-xl transition-all duration-200 ${
+              isOpen
+                ? 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'
+                : 'bg-gradient-to-br from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white'
+            }`}>
+              {isOpen ? (
+                <X size={isMobile ? 22 : 24} />
+              ) : (
+                <>
+                  <MessageCircle size={isMobile ? 22 : 24} />
+                  {/* Notification dot */}
+                  {messages.length > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-red-500 rounded-full border-2 border-white dark:border-gray-900" />
+                  )}
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      </button>
+        </button>
+      )}
 
-      {/* Backdrop (mobile) */}
-      {isOpen && isMobile && (
+      {/* Backdrop (mobile) - hidden when inline */}
+      {!inline && isOpen && isMobile && (
         <div
           className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
           onClick={() => setIsOpen(false)}
@@ -298,13 +303,13 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
       {/* Chat Panel */}
       <div
         ref={panelRef}
-        className={`fixed top-0 right-0 h-full bg-white dark:bg-gray-900 z-50 transform transition-all duration-300 ease-out flex flex-col border-l border-gray-200 dark:border-gray-700 ${
-          isMobile ? 'w-full' : 'w-[420px]'
+        className={`${inline ? 'flex flex-col h-full' : 'fixed top-0 right-0 h-full'} bg-white dark:bg-gray-900 ${inline ? '' : 'z-50 transform transition-all duration-300 ease-out'} flex flex-col border-l border-gray-200 dark:border-gray-700 ${
+          inline ? '' : isMobile ? 'w-full' : 'w-[420px]'
         } ${
-          isOpen ? 'translate-x-0' : '-translate-x-full'
+          inline ? '' : isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         style={{
-          boxShadow: isOpen ? '-8px 0 40px rgba(0, 0, 0, 0.15)' : 'none',
+          boxShadow: inline ? 'none' : (isOpen ? '-8px 0 40px rgba(0, 0, 0, 0.15)' : 'none'),
         }}
         role="dialog"
         aria-label="AI Assistant Chat"
@@ -333,13 +338,15 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
               onChange={setContextType}
               disabled={isLoading}
             />
-            <button
-              onClick={() => setIsOpen(false)}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors"
-              aria-label="Close chat"
-            >
-              <X size={20} />
-            </button>
+            {!inline && (
+              <button
+                onClick={() => setIsOpen(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors"
+                aria-label="Close chat"
+              >
+                <X size={20} />
+              </button>
+            )}
           </div>
         </div>
 
