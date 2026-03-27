@@ -44,7 +44,7 @@ def _get_frontend_dir() -> Path:
     return _get_project_root() / "frontend"
 
 @click.group()
-@click.version_option(version="0.2.1")
+@click.version_option(version="0.2.2")
 def cli() -> None:
     """LAL CLI - Learn Any Language CLI Tool.
 
