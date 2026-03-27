@@ -94,7 +94,9 @@ LAL_V0.1.0/
 
 3. **Install CLI via uv (recommended):**
    ```bash
-   uv tool install git+https://github.com/SaulLockYip/LAL.git
+   git clone https://github.com/SaulLockYip/LAL.git
+   cd LAL/cli
+   ./install.sh
    ```
 
    Or via pip:

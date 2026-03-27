@@ -419,7 +419,9 @@ Das Wetter heute ist schon gut...
 
 ```bash
 # 1. Install CLI via uv
-uv tool install git+https://github.com/SaulLockYip/LAL.git
+git clone https://github.com/SaulLockYip/LAL.git
+cd LAL/cli
+./install.sh
 
 # 2. Initialize the project (clones repo, installs deps, builds)
 lal-cli init
