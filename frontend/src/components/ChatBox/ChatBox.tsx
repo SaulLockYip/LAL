@@ -298,10 +298,10 @@ export function ChatBox({ userInfo, articleContext, wordListContext }: ChatBoxPr
       {/* Chat Panel */}
       <div
         ref={panelRef}
-        className={`fixed top-0 h-full bg-white dark:bg-gray-900 z-50 transform transition-all duration-300 ease-out flex flex-col border-l border-gray-200 dark:border-gray-700 ${
+        className={`fixed top-0 right-0 h-full bg-white dark:bg-gray-900 z-50 transform transition-all duration-300 ease-out flex flex-col border-l border-gray-200 dark:border-gray-700 ${
           isMobile ? 'w-full' : 'w-[420px]'
         } ${
-          isOpen ? 'translate-x-0' : 'translate-x-full'
+          isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         style={{
           boxShadow: isOpen ? '-8px 0 40px rgba(0, 0, 0, 0.15)' : 'none',
