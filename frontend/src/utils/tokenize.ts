@@ -57,15 +57,6 @@ function hasLatin(text: string): boolean {
   return false;
 }
 
-// Check if character is CJK punctuation (should not be part of word)
-function isCJKPunctuation(char: string): boolean {
-  const code = char.codePointAt(0);
-  if (!code) return false;
-
-  // CJK punctuation range
-  return (code >= 0x3000 && code <= 0x303F);
-}
-
 // Intl.Segmenter type declaration for older TypeScript versions
 declare namespace Intl {
   interface Segmenter {
@@ -111,18 +102,28 @@ function tokenizeCJK(text: string): CJKSegment[] {
     }
   }
 
-  // Fallback: character-level tokenization for CJK
-  // Each character is a potential word for language learning
-  return text.split('').filter(char => {
-    const code = char.codePointAt(0);
-    if (!code) return false;
-    // Filter out spaces only (preserve punctuation as non-word tokens)
-    if (/\s/.test(char)) return false;
-    return true;
-  }).map(char => ({
-    text: char,
-    isWord: !isCJKPunctuation(char)
-  }));
+  // Fallback: group consecutive non-punctuation CJK characters into words
+  // This prevents single-character splitting of Japanese/Chinese words like "浅草寺"
+  const chars = text.split('');
+  const groups: CJKSegment[] = [];
+  let currentGroup = '';
+
+  for (const char of chars) {
+    if (/\s/.test(char)) {
+      if (currentGroup) {
+        groups.push({ text: currentGroup, isWord: true });
+        currentGroup = '';
+      }
+      continue;
+    }
+    currentGroup += char;
+  }
+
+  if (currentGroup) {
+    groups.push({ text: currentGroup, isWord: true });
+  }
+
+  return groups;
 }
 
 // Split text into segments by script type
