@@ -38,7 +38,7 @@ export function ChatBox({ inline = false, userInfo, articleContext, wordListCont
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamedContent, setStreamedContent] = useState('');
-  const [contextType, setContextType] = useState<ContextType>('global');
+  const [contextType, setContextType] = useState<ContextType>(articleContext ? 'article' : 'global');
   const [showHistory, setShowHistory] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
