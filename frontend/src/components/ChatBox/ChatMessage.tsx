@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Copy, Check, Bot, User } from 'lucide-react';
+import { Copy, Check, Bot, User, RotateCcw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { chatToast } from './ChatToast';
 
 export interface Message {
   id: string;
@@ -11,16 +12,25 @@ export interface Message {
 
 interface ChatMessageProps {
   message: Message;
+  isLastAssistantMessage?: boolean;
+  onRegenerate?: () => void;
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, isLastAssistantMessage, onRegenerate }: ChatMessageProps) {
   const [copied, setCopied] = useState(false);
   const [showTimestamp, setShowTimestamp] = useState(false);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(message.content);
     setCopied(true);
+    chatToast.success('Message copied to clipboard');
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRegenerate = () => {
+    if (onRegenerate) {
+      onRegenerate();
+    }
   };
 
   const formatTime = (date: Date) => {
@@ -132,6 +142,19 @@ export function ChatMessage({ message }: ChatMessageProps) {
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
+
+        {/* Regenerate button for last assistant message */}
+        {message.role === 'assistant' && isLastAssistantMessage && onRegenerate && (
+          <button
+            onClick={handleRegenerate}
+            className={`absolute -top-2 right-10 p-1.5 rounded-lg transition-opacity bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 ${
+              showTimestamp ? 'opacity-100' : 'opacity-0'
+            }`}
+            aria-label="Regenerate response"
+          >
+            <RotateCcw size={14} />
+          </button>
+        )}
       </div>
 
       {message.role === 'user' && (

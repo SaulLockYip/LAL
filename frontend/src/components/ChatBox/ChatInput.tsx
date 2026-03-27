@@ -5,16 +5,20 @@ interface ChatInputProps {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
+  onEditLastMessage?: (content: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  lastUserMessage?: string;
 }
 
 export function ChatInput({
   value,
   onChange,
   onSend,
+  onEditLastMessage,
   disabled = false,
   placeholder = 'Type a message...',
+  lastUserMessage,
 }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -33,6 +37,29 @@ export function ChatInput({
   }, [value]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Ctrl/Cmd + Enter to send
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (value.trim() && !disabled) {
+        onSend();
+      }
+      return;
+    }
+
+    // Up arrow to edit last user message
+    if (e.key === 'ArrowUp' && !e.shiftKey && value === '' && lastUserMessage && onEditLastMessage) {
+      e.preventDefault();
+      onEditLastMessage(lastUserMessage);
+      // Move cursor to end
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = lastUserMessage.length;
+        }
+      }, 0);
+      return;
+    }
+
+    // Regular Enter to send (without Shift)
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (value.trim() && !disabled) {
