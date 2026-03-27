@@ -64,7 +64,7 @@ declare namespace Intl {
       segment: string;
       index: number;
       input: string;
-      isWord: boolean;
+      isWordLike: boolean;
     }>;
   }
   interface SegmenterConstructor {
@@ -94,7 +94,7 @@ function tokenizeCJK(text: string): CJKSegment[] {
         .filter(s => !/^\s+$/.test(s.segment)) // Filter out whitespace-only segments
         .map(s => ({
           text: s.segment,
-          isWord: s.isWord
+          isWord: s.isWordLike
         }))
         .filter(s => s.text.length > 0);
     } catch {
