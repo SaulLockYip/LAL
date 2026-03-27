@@ -38,6 +38,17 @@ function hasCJK(text: string): boolean {
   return false;
 }
 
+// Check if text contains Japanese characters (Hiragana/Katakana: 0x3040-0x30FF)
+function hasJapanese(text: string): boolean {
+  for (const char of text) {
+    const code = char.codePointAt(0);
+    if (code !== undefined && code >= 0x3040 && code <= 0x30FF) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Check if text contains Latin characters
 function hasLatin(text: string): boolean {
   for (const char of text) {
@@ -83,7 +94,10 @@ function tokenizeCJK(text: string): CJKSegment[] {
   // Intl.Segmenter is supported in modern browsers
   if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
     try {
-      const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
+      // Use 'ja' locale for Japanese text (works for all CJK)
+      // Use 'zh' locale for Chinese/Korean text
+      const locale = hasJapanese(text) ? 'ja' : 'zh';
+      const segmenter = new Intl.Segmenter(locale, { granularity: 'word' });
       const segments = [...segmenter.segment(text)];
       return segments
         .filter(s => !/^\s+$/.test(s.segment)) // Filter out whitespace-only segments
